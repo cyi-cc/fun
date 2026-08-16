@@ -1,0 +1,23 @@
+# IDE
+.idea/
+*.iml
+
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Generated code
+gen/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Dependencies
+vendor/
+node_modules/
