@@ -11,17 +11,22 @@ func (ctx templateTs) genClientTemplate() string {
   status: number;
 };
 
+export type resultStatus = 0 | 1 | 2 | 4 | 5;
+// 0 成功；1 框架错误；2 业务错误；4 网络错误；5 超时
+
 export type RequestInterceptor = (
   serviceName: string,
   methodName: string,
-  dto: any
+  state: Record<string, string>,
+  dto?: any
 ) => Promise<void> | void;
 
+// 返回新 result 将替换原结果继续向下传递（可用于集中换 token / 错误处理）
 export type ResponseInterceptor = (
   serviceName: string,
   methodName: string,
   result: result<any>
-) => Promise<void> | void;
+) => Promise<result<any> | void> | result<any> | void;
 
 export class Client {
   private url: string;
@@ -46,26 +51,27 @@ export class Client {
   }
 
   async request<T>(serviceName: string, methodName: string, dto?: any): Promise<result<T>> {
+    const state: Record<string, string> = { ...this.state };
     for (const i of this.requestInterceptors) {
-      await i(serviceName, methodName, dto);
+      await i(serviceName, methodName, state, dto);
     }
-    const res = await fetch(this.url + "/cell", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ serviceName, methodName, data: dto, ...(Object.keys(this.state).length ? { state: this.state } : {}) }),
-    });
-    const out = (await res.json()) as result<T>;
-    const anyResult: result<any> = {
-      id: out.id,
-      code: out.code,
-      data: out.data,
-      msg: out.msg,
-      status: out.status,
-    };
+    let out: result<T>;
+    try {
+      const res = await fetch(this.url + "/cell", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ serviceName, methodName, data: dto, ...(Object.keys(state).length ? { state } : {}) }),
+      });
+      out = (await res.json()) as result<T>;
+    } catch (e: any) {
+      out = { status: 4, msg: (e && e.message) || "网络错误" } as result<T>;
+    }
+    let cur: result<any> = out as result<any>;
     for (const i of this.responseInterceptors) {
-      await i(serviceName, methodName, anyResult);
+      const replaced = await i(serviceName, methodName, cur);
+      if (replaced) cur = replaced;
     }
-    return out;
+    return cur as result<T>;
   }
 
   async stream<T>(
@@ -74,13 +80,14 @@ export class Client {
     dto: any | undefined,
     onMessage: (data: T) => void
   ): Promise<void> {
+    const state: Record<string, string> = { ...this.state };
     for (const i of this.requestInterceptors) {
-      await i(serviceName, methodName, dto);
+      await i(serviceName, methodName, state, dto);
     }
     const res = await fetch(this.url + "/cell", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ serviceName, methodName, data: dto, ...(Object.keys(this.state).length ? { state: this.state } : {}) }),
+      body: JSON.stringify({ serviceName, methodName, data: dto, ...(Object.keys(state).length ? { state } : {}) }),
     });
     if (!res.ok) return;
     const anyResult: result<any> = { status: 0 };
