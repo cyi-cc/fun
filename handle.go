@@ -11,10 +11,15 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
-// handle 处理 HTTP 请求
+// handle 处理 HTTP 请求：先匹配自定义路由（BindRoute），未命中走 /cell RPC
 func (f *Fun) handle(fastCtx *fasthttp.RequestCtx) {
 	ctx := &Ctx{RequestCtx: fastCtx}
 	defer f.handlePanic(ctx)
+
+	if handler, ok := f.routes[string(fastCtx.Method())+" "+string(fastCtx.Path())]; ok {
+		f.handleRoute(fastCtx, handler)
+		return
+	}
 
 	if ctx.path() != "/cell" {
 		ctx.setStatusCode(fasthttp.StatusNotFound)
