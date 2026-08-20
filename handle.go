@@ -7,18 +7,26 @@ import (
 	"fmt"
 	"reflect"
 	"runtime/debug"
+	"strings"
 
 	"github.com/valyala/fasthttp"
 )
 
-// handle 处理 HTTP 请求：先匹配自定义路由（BindRoute），未命中走 /cell RPC
+// handle 处理 HTTP 请求：先匹配自定义路由（BindRoute 精确/通配），未命中走 /cell RPC
 func (f *Fun) handle(fastCtx *fasthttp.RequestCtx) {
 	ctx := &Ctx{RequestCtx: fastCtx}
 	defer f.handlePanic(ctx)
 
-	if handler, ok := f.routes[string(fastCtx.Method())+" "+string(fastCtx.Path())]; ok {
-		f.handleRoute(fastCtx, handler)
+	method, path := string(fastCtx.Method()), string(fastCtx.Path())
+	if handler, ok := f.routes[method+" "+path]; ok {
+		f.handleRoute(fastCtx, handler, "")
 		return
+	}
+	for _, r := range f.wildcardRoutes[method] {
+		if path == r.prefix || strings.HasPrefix(path, r.prefix+"/") {
+			f.handleRoute(fastCtx, r.handler, strings.TrimPrefix(path, r.prefix+"/"))
+			return
+		}
 	}
 
 	if ctx.path() != "/cell" {

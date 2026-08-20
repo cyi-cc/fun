@@ -9,11 +9,19 @@ import (
 )
 
 type Fun struct {
-	methods       map[string]methodInfo
-	routes        map[string]RouteHandler // 自定义路由："GET /path" → 处理器
-	boxes         *sync.Map              // 依赖容器：reflect.Type → reflect.Value
-	guards        []*any                 // 全局 Guard
-	serviceGuards map[string][]*any      // 服务级 Guard，按服务名
+	methods        map[string]methodInfo
+	routes         map[string]RouteHandler // 自定义路由："GET /path" → 处理器（精确匹配）
+	wildcardRoutes map[string][]wildcardRoute
+	boxes          *sync.Map              // 依赖容器：reflect.Type → reflect.Value
+	guards         []*any                 // 全局 Guard
+	serviceGuards  map[string][]*any      // 服务级 Guard，按服务名
+}
+
+// wildcardRoute 通配符路由（BindRoute path 以 "/*" 结尾注册）：
+// prefix 如 "/image"，匹配 prefix 与 prefix 下任意子路径
+type wildcardRoute struct {
+	prefix  string
+	handler RouteHandler
 }
 
 var (
@@ -33,10 +41,11 @@ type methodInfo struct {
 
 func New() *Fun {
 	f := &Fun{
-		methods:       map[string]methodInfo{},
-		routes:        map[string]RouteHandler{},
-		boxes:         &sync.Map{},
-		serviceGuards: map[string][]*any{},
+		methods:        map[string]methodInfo{},
+		routes:         map[string]RouteHandler{},
+		wildcardRoutes: map[string][]wildcardRoute{},
+		boxes:          &sync.Map{},
+		serviceGuards:  map[string][]*any{},
 	}
 	if fun == nil {
 		fun = f
