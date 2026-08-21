@@ -56,6 +56,7 @@ func (ctx GenTs) genService(svc *genSvc, serviceContext *genServiceType) {
 				argsText += ",dto"
 				nestedImports = append(nestedImports, ctx.genStruct(gm.dtoType))
 			}
+			serviceContext.IsIncludeRequest = true
 			serviceContext.GenMethodTypeList = append(serviceContext.GenMethodTypeList, &genMethodType{
 				MethodName:      firstLetterToLower(gm.name),
 				ReturnValueText: returnValueText,
@@ -83,6 +84,7 @@ func (ctx GenTs) genService(svc *genSvc, serviceContext *genServiceType) {
 				nestedImports = ctx.genReturnTypes(returnType, nestedImports)
 			}
 		} else {
+			serviceContext.IsIncludeRequest = true
 			t := firstLetterToLower(ctx.typeToTemplateType(returnType))
 			if !strings.Contains(t, "[]") && strings.Contains(t, "[") {
 				returnValueText = getGenericTypeName(t) + parseGenericTypeParams(t)
@@ -151,13 +153,13 @@ func (ctx GenTs) genDefaultService() {
 	f := GetFun()
 	genContext := genType{GenServiceList: []*genServiceType{}}
 
-	for svcName, methods := range f.serviceGroups() {
+	for _, svc := range f.serviceGroups() {
 		serviceContext := &genServiceType{
-			ServiceName:       firstLetterToLower(svcName),
+			ServiceName:       firstLetterToLower(svc.name),
 			GenMethodTypeList: []*genMethodType{},
 		}
 		genContext.GenServiceList = append(genContext.GenServiceList, serviceContext)
-		ctx.genService(&genSvc{name: svcName, methods: methods}, serviceContext)
+		ctx.genService(svc, serviceContext)
 	}
 	genCode(ctx.template.genClientTemplate(), "client", nil, ctx.getName())
 	genCode(ctx.template.genDefaultServiceTemplate(), "fun", genContext, ctx.getName())

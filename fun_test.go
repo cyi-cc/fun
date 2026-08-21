@@ -93,6 +93,7 @@ func TestCheckDtoRequired(t *testing.T) {
 }
 
 func TestGenCode(t *testing.T) {
+	isolateGeneratorGlobals(t)
 	GetFun().BindService(&TestSvc{})
 	SetOutput(t.TempDir())
 	GenCode(GenGo{}, GenTs{})

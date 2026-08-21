@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"text/template"
 )
@@ -33,8 +34,8 @@ type genMethod struct {
 	isStream bool
 }
 
-// serviceGroups 按服务名分组已注册方法
-func (f *Fun) serviceGroups() map[string][]*genMethod {
+// serviceGroups 按服务名和方法名稳定分组已注册方法
+func (f *Fun) serviceGroups() []*genSvc {
 	groups := map[string][]*genMethod{}
 	for key, m := range f.methods {
 		parts := strings.SplitN(key, ".", 2)
@@ -47,7 +48,14 @@ func (f *Fun) serviceGroups() map[string][]*genMethod {
 			isStream: m.isStream,
 		})
 	}
-	return groups
+
+	services := make([]*genSvc, 0, len(groups))
+	for name, methods := range groups {
+		sort.Slice(methods, func(i, j int) bool { return methods[i].name < methods[j].name })
+		services = append(services, &genSvc{name: name, methods: methods})
+	}
+	sort.Slice(services, func(i, j int) bool { return services[i].name < services[j].name })
+	return services
 }
 
 type genType struct {
@@ -79,6 +87,7 @@ type genServiceType struct {
 	GenMethodTypeList []*genMethodType
 	GenImport         []*genImportType
 	IsIncludeProxy    bool
+	IsIncludeRequest  bool
 	IsIncludeStream   bool
 }
 
@@ -103,6 +112,7 @@ func deduplicateServiceImports(imports []*genImportType) []*genImportType {
 			result = append(result, imp)
 		}
 	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result
 }
 

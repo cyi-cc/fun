@@ -132,13 +132,13 @@ func (ctx GenGo) genDefaultService() {
 	f := GetFun()
 	genContext := genType{GenServiceList: []*genServiceType{}}
 
-	for svcName, methods := range f.serviceGroups() {
+	for _, svc := range f.serviceGroups() {
 		serviceContext := &genServiceType{
-			ServiceName:       svcName,
+			ServiceName:       svc.name,
 			GenMethodTypeList: []*genMethodType{},
 		}
 		genContext.GenServiceList = append(genContext.GenServiceList, serviceContext)
-		ctx.genService(&genSvc{name: svcName, methods: methods}, serviceContext)
+		ctx.genService(svc, serviceContext)
 	}
 	genCode(ctx.template.genDefaultServiceTemplate(), "fun", genContext, ctx.getName())
 }

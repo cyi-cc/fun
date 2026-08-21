@@ -75,6 +75,7 @@ func TestBugNullableEnum(t *testing.T) {
 
 // bug3: 含 () error 方法的代码生成不应 panic，且类型应生成为 Void/void
 func TestBugGenErrorOnly(t *testing.T) {
+	isolateGeneratorGlobals(t)
 	GetFun().BindService(&BugSvc{})
 	SetOutput(t.TempDir())
 	GenCode(GenGo{}, GenTs{})
