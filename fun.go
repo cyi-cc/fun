@@ -15,6 +15,16 @@ type Fun struct {
 	boxes          *sync.Map         // 依赖容器：reflect.Type → reflect.Value
 	guards         []*any            // 全局 Guard
 	serviceGuards  map[string][]*any // 服务级 Guard，按服务名
+	bodyLimit      int               // 请求体上限（字节）；0 = fasthttp 默认 4MB
+}
+
+// SetBodyLimit 设置请求体上限（字节），须在 Start 前调用。
+// multipart 上传等大请求体的自定义路由需要时设置；0 或负数恢复默认。
+func (f *Fun) SetBodyLimit(n int) {
+	if n < 0 {
+		n = 0
+	}
+	f.bodyLimit = n
 }
 
 // wildcardRoute 通配符路由（BindRoute path 以 "/*" 结尾注册）：
@@ -172,9 +182,11 @@ func (f *Fun) callGuard(c *Ctx, serviceName string) {
 }
 
 func (f *Fun) Start(port uint16) {
-	addr := fmt.Sprintf(":%d", port)
-	err := fasthttp.ListenAndServe(addr, f.handle)
-	if err != nil {
+	server := &fasthttp.Server{Handler: f.handle}
+	if f.bodyLimit > 0 {
+		server.MaxRequestBodySize = f.bodyLimit
+	}
+	if err := server.ListenAndServe(fmt.Sprintf(":%d", port)); err != nil {
 		panic(err.Error())
 	}
 }
