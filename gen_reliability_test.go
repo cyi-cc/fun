@@ -3,6 +3,7 @@ package fun
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -30,6 +31,16 @@ func (*MixedGenSvc) Stream() (*Stream, error) { return &Stream{}, nil }
 type ZebraGenSvc struct{}
 
 func (*ZebraGenSvc) Watch() (*Stream, error) { return &Stream{}, nil }
+
+type GenOnlyDependency struct{}
+
+func (*GenOnlyDependency) New() { panic("generation initialized a runtime dependency") }
+
+type DependencyGenSvc struct {
+	Dependency *GenOnlyDependency
+}
+
+func (*DependencyGenSvc) Ping() error { return nil }
 
 func isolateGeneratorGlobals(t *testing.T) {
 	t.Helper()
@@ -69,6 +80,18 @@ func generatedFiles(t *testing.T, root string) map[string]string {
 	return files
 }
 
+func TestBindServiceForGenDoesNotInitializeDependencies(t *testing.T) {
+	isolateGeneratorGlobals(t)
+	f := GetFun()
+	f.BindServiceForGen(&DependencyGenSvc{})
+	if _, ok := f.methods["DependencyGenSvc.Ping"]; !ok {
+		t.Fatal("generation-only service method was not registered")
+	}
+	if _, ok := f.boxes.Load(reflect.TypeFor[*GenOnlyDependency]()); ok {
+		t.Fatal("generation-only registration stored a runtime dependency")
+	}
+}
+
 func TestGeneratedTypeScriptSignaturesAndImports(t *testing.T) {
 	isolateGeneratorGlobals(t)
 	f := GetFun()
@@ -85,6 +108,20 @@ func TestGeneratedTypeScriptSignaturesAndImports(t *testing.T) {
 			t.Fatal(err)
 		}
 		return string(body)
+	}
+
+	client := read("client.ts")
+	for _, want := range []string{
+		`state?: Record<string, string>;`,
+		`export type ResponseContext = {`,
+		`readonly requestState: Readonly<Record<string, string>>;`,
+		`readonly response?: Response;`,
+		`state = { ...this.state, ...options?.state };`,
+		`interceptor(serviceName, methodName, current, context)`,
+	} {
+		if !strings.Contains(client, want) {
+			t.Errorf("client.ts missing %q:\n%s", want, client)
+		}
 	}
 
 	alpha := read("alphaGenSvc.ts")

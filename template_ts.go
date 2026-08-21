@@ -16,10 +16,12 @@ export type resultStatus = 0 | 1 | 2 | 4 | 5;
 
 export type RequestOptions = {
   signal?: AbortSignal;
+  state?: Record<string, string>;
 };
 
 export type StreamOptions = {
   signal?: AbortSignal;
+  state?: Record<string, string>;
 };
 
 export type RequestInterceptor = (
@@ -29,10 +31,22 @@ export type RequestInterceptor = (
   dto?: any
 ) => Promise<void> | void;
 
+export type ResponseContext = {
+  readonly requestState: Readonly<Record<string, string>>;
+  readonly response?: Response;
+};
+
 export type ResponseInterceptor = (
   serviceName: string,
   methodName: string,
   result: result<any>
+) => Promise<result<any> | void> | result<any> | void;
+
+export type ContextResponseInterceptor = (
+  serviceName: string,
+  methodName: string,
+  result: result<any>,
+  context: ResponseContext
 ) => Promise<result<any> | void> | result<any> | void;
 
 function messageOf(error: unknown): string {
@@ -137,7 +151,7 @@ export class Client {
   private url: string;
   private state: Record<string, string> = {};
   private requestInterceptors: RequestInterceptor[] = [];
-  private responseInterceptors: ResponseInterceptor[] = [];
+  private responseInterceptors: ContextResponseInterceptor[] = [];
 
   constructor(url: string) {
     this.url = url.replace(/\/+$/, "");
@@ -151,19 +165,26 @@ export class Client {
     this.requestInterceptors.push(interceptor);
   }
 
-  addResponseInterceptor(interceptor: ResponseInterceptor) {
-    this.responseInterceptors.push(interceptor);
+  addResponseInterceptor(interceptor: ResponseInterceptor): void;
+  addResponseInterceptor(interceptor: ContextResponseInterceptor): void;
+  addResponseInterceptor(interceptor: ResponseInterceptor | ContextResponseInterceptor) {
+    this.responseInterceptors.push(interceptor as ContextResponseInterceptor);
   }
 
   private async interceptResponse(
     serviceName: string,
     methodName: string,
-    initial: result<any>
+    initial: result<any>,
+    requestState: Readonly<Record<string, string>>,
+    response?: Response
   ): Promise<result<any>> {
     let current = initial;
+    const context: ResponseContext = Object.freeze(
+      response === undefined ? { requestState } : { requestState, response }
+    );
     for (const interceptor of this.responseInterceptors) {
       try {
-        const replaced = await interceptor(serviceName, methodName, current);
+        const replaced = await interceptor(serviceName, methodName, current, context);
         if (replaced) current = replaced;
       } catch (error) {
         current = failure(1, ` + "`Response interceptor failed: ${messageOf(error)}`" + `);
@@ -172,12 +193,19 @@ export class Client {
     return current;
   }
 
-  private async requestState(serviceName: string, methodName: string, dto: any): Promise<Record<string, string>> {
-    const state: Record<string, string> = { ...this.state };
+  private async interceptRequest(
+    serviceName: string,
+    methodName: string,
+    state: Record<string, string>,
+    dto: any
+  ): Promise<void> {
     for (const interceptor of this.requestInterceptors) {
       await interceptor(serviceName, methodName, state, dto);
     }
-    return state;
+  }
+
+  private snapshotState(state: Record<string, string>): Readonly<Record<string, string>> {
+    return Object.freeze({ ...state });
   }
 
   async request<T>(
@@ -188,12 +216,45 @@ export class Client {
   ): Promise<result<T>> {
     let state: Record<string, string>;
     try {
-      state = await this.requestState(serviceName, methodName, dto);
+      state = { ...this.state, ...options?.state };
     } catch (error) {
       return await this.interceptResponse(
         serviceName,
         methodName,
-        failure(1, ` + "`Request interceptor failed: ${messageOf(error)}`" + `)
+        failure(1, ` + "`Could not prepare request state: ${messageOf(error)}`" + `),
+        Object.freeze({})
+      ) as result<T>;
+    }
+    try {
+      await this.interceptRequest(serviceName, methodName, state, dto);
+    } catch (error) {
+      let requestState: Readonly<Record<string, string>>;
+      try {
+        requestState = this.snapshotState(state);
+      } catch (snapshotError) {
+        return await this.interceptResponse(
+          serviceName,
+          methodName,
+          failure(1, ` + "`Could not snapshot request state: ${messageOf(snapshotError)}`" + `),
+          Object.freeze({})
+        ) as result<T>;
+      }
+      return await this.interceptResponse(
+        serviceName,
+        methodName,
+        failure(1, ` + "`Request interceptor failed: ${messageOf(error)}`" + `),
+        requestState
+      ) as result<T>;
+    }
+    let requestState: Readonly<Record<string, string>>;
+    try {
+      requestState = this.snapshotState(state);
+    } catch (error) {
+      return await this.interceptResponse(
+        serviceName,
+        methodName,
+        failure(1, ` + "`Could not snapshot request state: ${messageOf(error)}`" + `),
+        Object.freeze({})
       ) as result<T>;
     }
 
@@ -203,7 +264,7 @@ export class Client {
         serviceName,
         methodName,
         data: dto,
-        ...(Object.keys(state).length ? { state } : {}),
+        ...(Object.keys(requestState).length ? { state: requestState } : {}),
       });
       if (serialized === undefined) throw new Error("serialization produced no output");
       body = serialized;
@@ -211,13 +272,15 @@ export class Client {
       return await this.interceptResponse(
         serviceName,
         methodName,
-        failure(1, ` + "`Could not serialize request: ${messageOf(error)}`" + `)
+        failure(1, ` + "`Could not serialize request: ${messageOf(error)}`" + `),
+        requestState
       ) as result<T>;
     }
 
     let output: result<any>;
+    let response: Response | undefined;
     try {
-      const response = await fetch(` + "`${this.url}/cell`" + `, {
+      response = await fetch(` + "`${this.url}/cell`" + `, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body,
@@ -231,7 +294,7 @@ export class Client {
     } catch (error) {
       output = requestFailure(error, options?.signal, false);
     }
-    return await this.interceptResponse(serviceName, methodName, output) as result<T>;
+    return await this.interceptResponse(serviceName, methodName, output, requestState, response) as result<T>;
   }
 
   async stream<T>(
@@ -243,12 +306,45 @@ export class Client {
   ): Promise<result<void>> {
     let state: Record<string, string>;
     try {
-      state = await this.requestState(serviceName, methodName, dto);
+      state = { ...this.state, ...options?.state };
     } catch (error) {
       return await this.interceptResponse(
         serviceName,
         methodName,
-        failure(1, ` + "`Request interceptor failed: ${messageOf(error)}`" + `)
+        failure(1, ` + "`Could not prepare request state: ${messageOf(error)}`" + `),
+        Object.freeze({})
+      );
+    }
+    try {
+      await this.interceptRequest(serviceName, methodName, state, dto);
+    } catch (error) {
+      let requestState: Readonly<Record<string, string>>;
+      try {
+        requestState = this.snapshotState(state);
+      } catch (snapshotError) {
+        return await this.interceptResponse(
+          serviceName,
+          methodName,
+          failure(1, ` + "`Could not snapshot request state: ${messageOf(snapshotError)}`" + `),
+          Object.freeze({})
+        );
+      }
+      return await this.interceptResponse(
+        serviceName,
+        methodName,
+        failure(1, ` + "`Request interceptor failed: ${messageOf(error)}`" + `),
+        requestState
+      );
+    }
+    let requestState: Readonly<Record<string, string>>;
+    try {
+      requestState = this.snapshotState(state);
+    } catch (error) {
+      return await this.interceptResponse(
+        serviceName,
+        methodName,
+        failure(1, ` + "`Could not snapshot request state: ${messageOf(error)}`" + `),
+        Object.freeze({})
       );
     }
 
@@ -258,7 +354,7 @@ export class Client {
         serviceName,
         methodName,
         data: dto,
-        ...(Object.keys(state).length ? { state } : {}),
+        ...(Object.keys(requestState).length ? { state: requestState } : {}),
       });
       if (serialized === undefined) throw new Error("serialization produced no output");
       body = serialized;
@@ -266,7 +362,8 @@ export class Client {
       return await this.interceptResponse(
         serviceName,
         methodName,
-        failure(1, ` + "`Could not serialize request: ${messageOf(error)}`" + `)
+        failure(1, ` + "`Could not serialize request: ${messageOf(error)}`" + `),
+        requestState
       );
     }
 
@@ -282,7 +379,8 @@ export class Client {
       return await this.interceptResponse(
         serviceName,
         methodName,
-        requestFailure(error, options?.signal, true)
+        requestFailure(error, options?.signal, true),
+        requestState
       );
     }
 
@@ -294,10 +392,18 @@ export class Client {
         return await this.interceptResponse(
           serviceName,
           methodName,
-          responseReadFailure(error, response, options?.signal, true)
+          responseReadFailure(error, response, options?.signal, true),
+          requestState,
+          response
         );
       }
-      return await this.interceptResponse(serviceName, methodName, parseResult(response, text));
+      return await this.interceptResponse(
+        serviceName,
+        methodName,
+        parseResult(response, text),
+        requestState,
+        response
+      );
     }
 
     if (mediaType(response) !== "application/x-ndjson") {
@@ -308,7 +414,9 @@ export class Client {
         return await this.interceptResponse(
           serviceName,
           methodName,
-          responseReadFailure(error, response, options?.signal, true)
+          responseReadFailure(error, response, options?.signal, true),
+          requestState,
+          response
         );
       }
       const rpcResult = parseResult(response, text);
@@ -317,12 +425,20 @@ export class Client {
         methodName,
         rpcResult.status === 0
           ? failure(1, "Expected application/x-ndjson response")
-          : rpcResult
+          : rpcResult,
+        requestState,
+        response
       );
     }
 
     if (!response.body) {
-      return await this.interceptResponse(serviceName, methodName, { status: 0 });
+      return await this.interceptResponse(
+        serviceName,
+        methodName,
+        { status: 0 },
+        requestState,
+        response
+      );
     }
 
     let reader: ReadableStreamDefaultReader<Uint8Array>;
@@ -332,7 +448,9 @@ export class Client {
       return await this.interceptResponse(
         serviceName,
         methodName,
-        responseReadFailure(error, response, options?.signal, true)
+        responseReadFailure(error, response, options?.signal, true),
+        requestState,
+        response
       );
     }
     const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -426,7 +544,9 @@ export class Client {
     return await this.interceptResponse(
       serviceName,
       methodName,
-      failed || { status: 0 }
+      failed || { status: 0 },
+      requestState,
+      response
     );
   }
 }`

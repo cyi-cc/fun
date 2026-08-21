@@ -12,9 +12,9 @@ type Fun struct {
 	methods        map[string]methodInfo
 	routes         map[string]RouteHandler // 自定义路由："GET /path" → 处理器（精确匹配）
 	wildcardRoutes map[string][]wildcardRoute
-	boxes          *sync.Map              // 依赖容器：reflect.Type → reflect.Value
-	guards         []*any                 // 全局 Guard
-	serviceGuards  map[string][]*any      // 服务级 Guard，按服务名
+	boxes          *sync.Map         // 依赖容器：reflect.Type → reflect.Value
+	guards         []*any            // 全局 Guard
+	serviceGuards  map[string][]*any // 服务级 Guard，按服务名
 }
 
 // wildcardRoute 通配符路由（BindRoute path 以 "/*" 结尾注册）：
@@ -68,16 +68,7 @@ func GetFun() *Fun {
 //
 // guardList 为该服务绑定的 Guard，方法调用前按注册顺序执行
 func (f *Fun) BindService(service any, guardList ...Guard) {
-	t := reflect.TypeOf(service)
-	// 必须是指针指向的结构体，匿名类型无法注册
-	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Struct {
-		panic("fun: BindService requires a pointer to a struct")
-	}
-	name := t.Elem().Name()
-	if name == "" {
-		panic("fun: BindService requires a named type")
-	}
-
+	t, name := serviceType(service)
 	boxWired(service, f)
 
 	serviceGuards := make([]*any, 0, len(guardList))
@@ -86,7 +77,29 @@ func (f *Fun) BindService(service any, guardList ...Guard) {
 		serviceGuards = append(serviceGuards, serviceGuardWired(guard, f))
 	}
 	f.serviceGuards[name] = serviceGuards
+	f.bindServiceMethods(t, name)
+}
 
+// BindServiceForGen registers service metadata for code generation without
+// constructing runtime dependencies or guards.
+func (f *Fun) BindServiceForGen(service any) {
+	t, name := serviceType(service)
+	f.bindServiceMethods(t, name)
+}
+
+func serviceType(service any) (reflect.Type, string) {
+	t := reflect.TypeOf(service)
+	if t == nil || t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Struct {
+		panic("fun: BindService requires a pointer to a struct")
+	}
+	name := t.Elem().Name()
+	if name == "" {
+		panic("fun: BindService requires a named type")
+	}
+	return t, name
+}
+
+func (f *Fun) bindServiceMethods(t reflect.Type, name string) {
 	for m := range t.Methods() {
 		m := m
 		// Ctx 命名持有 *fasthttp.RequestCtx（非嵌入），服务方法集只含业务方法，无需过滤提升方法
