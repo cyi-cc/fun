@@ -39,7 +39,9 @@ func (s *BugSvc) Ticker() (string, *Stream, error) {
 func bugInvoke(t *testing.T, method string, data map[string]any) (*Result[any], error) {
 	t.Helper()
 	f := New()
-	f.BindService(&BugSvc{})
+	if err := f.BindService(&BugSvc{}); err != nil {
+		t.Fatal(err)
+	}
 	if data == nil {
 		data = map[string]any{}
 	}
@@ -76,7 +78,9 @@ func TestBugNullableEnum(t *testing.T) {
 // bug3: 含 () error 方法的代码生成不应 panic，且类型应生成为 Void/void
 func TestBugGenErrorOnly(t *testing.T) {
 	isolateGeneratorGlobals(t)
-	GetFun().BindService(&BugSvc{})
+	if err := GetFun().BindService(&BugSvc{}); err != nil {
+		t.Fatal(err)
+	}
 	SetOutput(t.TempDir())
 	GenCode(GenGo{}, GenTs{})
 	goSrc, err := os.ReadFile(filepath.Join(getDirectory(), "go", "bug_svc.go"))
@@ -98,7 +102,9 @@ func TestBugGenErrorOnly(t *testing.T) {
 // bug4+5: 响应键应为小写；(T, stream, error) 的 T 应作为流的第一条消息下发
 func TestBugJsonKeysAndStreamFirst(t *testing.T) {
 	f := New()
-	f.BindService(&BugSvc{})
+	if err := f.BindService(&BugSvc{}); err != nil {
+		t.Fatal(err)
+	}
 	go f.Start(39003)
 	time.Sleep(300 * time.Millisecond)
 
@@ -150,7 +156,9 @@ func (s *NullSlicSvc) Save(dto NullSlicDto) (string, error) { return "ok", nil }
 
 func TestBugSliceNull(t *testing.T) {
 	f := New()
-	f.BindService(&NullSlicSvc{})
+	if err := f.BindService(&NullSlicSvc{}); err != nil {
+		t.Fatal(err)
+	}
 	data := map[string]any{"tags": nil}
 	c := &Ctx{Ip: "1", MethodName: "Save", ServiceName: "NullSlicSvc", Data: &data}
 	var streamCh chan any
@@ -177,7 +185,9 @@ func (s *LeakSvc) Fail() (*Stream, error) {
 
 func TestBugStreamLeak(t *testing.T) {
 	f := New()
-	f.BindService(&LeakSvc{})
+	if err := f.BindService(&LeakSvc{}); err != nil {
+		t.Fatal(err)
+	}
 	c := &Ctx{Ip: "1", MethodName: "Fail", ServiceName: "LeakSvc"}
 	var streamCh chan any
 	var streamDone chan struct{}
@@ -202,7 +212,9 @@ func (s *CollideSvc) Cookie() (string, error) { return "cookie", nil }
 
 func TestBugMethodNameCollision(t *testing.T) {
 	f := New()
-	f.BindService(&CollideSvc{})
+	if err := f.BindService(&CollideSvc{}); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := f.methods["CollideSvc.Cookie"]; !ok {
 		t.Fatal("Cookie method dropped due to name collision with fasthttp.RequestCtx")
 	}

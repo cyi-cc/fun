@@ -1,6 +1,7 @@
 package fun
 
 import (
+	"bytes"
 	"encoding/json"
 	"net"
 	"reflect"
@@ -18,6 +19,10 @@ type Ctx struct {
 	ServiceName string
 	Data        *map[string]any
 	RequestCtx  *fasthttp.RequestCtx
+
+	// rawData 请求 data 字段的原始 JSON 字节（HTTP 路径填充）。
+	// 业务 DTO 解码优先用它：不经 map[string]any 的 float64 往返，大整数无精度丢失
+	rawData []byte
 }
 
 var ctxType = reflect.TypeFor[Ctx]()
@@ -49,10 +54,14 @@ func (c *Ctx) send(result Result[any]) {
 	_, _ = c.write(out)
 }
 
-// lowerKeysFromJSON 解析 JSON 后递归把所有对象键转为首字母小写
+// lowerKeysFromJSON 解析 JSON 后递归把所有对象键转为首字母小写。
+// 数字以 json.Number 原文保留，不落入 float64——否则响应侧 int64
+// 超过 2^53 会丢精度（9007199254740993 → ...992）
 func lowerKeysFromJSON(data []byte) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
 	var raw any
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := dec.Decode(&raw); err != nil {
 		return nil, err
 	}
 	return lowerKeys(raw), nil

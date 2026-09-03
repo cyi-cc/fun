@@ -12,7 +12,9 @@ import (
 func startRouteServer(t *testing.T, port uint16) *Fun {
 	t.Helper()
 	f := New()
-	f.BindService(&TestSvc{})
+	if err := f.BindService(&TestSvc{}); err != nil {
+		t.Fatal(err)
+	}
 
 	// GET：查询参数 + 纯文本自定义响应
 	f.BindRoute("GET", "/ping", func(ctx *RouteCtx) error {

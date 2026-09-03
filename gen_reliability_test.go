@@ -95,9 +95,11 @@ func TestBindServiceForGenDoesNotInitializeDependencies(t *testing.T) {
 func TestGeneratedTypeScriptSignaturesAndImports(t *testing.T) {
 	isolateGeneratorGlobals(t)
 	f := GetFun()
-	f.BindService(&ZebraGenSvc{})
-	f.BindService(&MixedGenSvc{})
-	f.BindService(&AlphaGenSvc{})
+	for _, svc := range []any{&ZebraGenSvc{}, &MixedGenSvc{}, &AlphaGenSvc{}} {
+		if err := f.BindService(svc); err != nil {
+			t.Fatal(err)
+		}
+	}
 	SetOutput(t.TempDir())
 	GenCode(GenTs{})
 
@@ -168,9 +170,11 @@ func TestGeneratedTypeScriptSignaturesAndImports(t *testing.T) {
 func TestGeneratedSourcesAreDeterministic(t *testing.T) {
 	isolateGeneratorGlobals(t)
 	f := GetFun()
-	f.BindService(&ZebraGenSvc{})
-	f.BindService(&AlphaGenSvc{})
-	f.BindService(&MixedGenSvc{})
+	for _, svc := range []any{&ZebraGenSvc{}, &AlphaGenSvc{}, &MixedGenSvc{}} {
+		if err := f.BindService(svc); err != nil {
+			t.Fatal(err)
+		}
+	}
 	root := t.TempDir()
 	SetOutput(root)
 	GenCode(GenGo{}, GenTs{})

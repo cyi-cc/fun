@@ -16,7 +16,6 @@ import (
 
 // Result 统一响应结构
 type Result[T any] struct {
-	Id     string
 	Code   *uint16
 	Data   *T
 	Msg    *string
@@ -114,7 +113,7 @@ func Request[T any](c *Client, serviceName string, methodName string, dto ...any
 		v := any(*out.Data)
 		anyData = &v
 	}
-	anyResult := Result[any]{Id: out.Id, Code: out.Code, Data: anyData, Msg: out.Msg, Status: out.Status}
+	anyResult := Result[any]{Code: out.Code, Data: anyData, Msg: out.Msg, Status: out.Status}
 	for _, i := range c.responseInterceptors {
 		if err := i(serviceName, methodName, anyResult); err != nil {
 			return Result[T]{Status: 2, Msg: ptr(err.Error())}

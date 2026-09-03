@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"runtime/debug"
 	"strings"
+	"sync"
 
 	"github.com/valyala/fasthttp"
 )
@@ -18,13 +19,13 @@ func (f *Fun) handle(fastCtx *fasthttp.RequestCtx) {
 	defer f.handlePanic(ctx)
 
 	method, path := string(fastCtx.Method()), string(fastCtx.Path())
-	if handler, ok := f.routes[method+" "+path]; ok {
-		f.handleRoute(fastCtx, handler, "")
+	if r, ok := f.routes[method+" "+path]; ok {
+		f.handleRoute(fastCtx, r, "")
 		return
 	}
 	for _, r := range f.wildcardRoutes[method] {
 		if path == r.prefix || strings.HasPrefix(path, r.prefix+"/") {
-			f.handleRoute(fastCtx, r.handler, strings.TrimPrefix(path, r.prefix+"/"))
+			f.handleRoute(fastCtx, r.route, strings.TrimPrefix(path, r.prefix+"/"))
 			return
 		}
 	}
@@ -39,9 +40,11 @@ func (f *Fun) handle(fastCtx *fasthttp.RequestCtx) {
 	}
 
 	body := ctx.postBody()
-	var requestInfo RequestInfo[map[string]any]
+	// Data 以原始字节保存：校验用解码后的 map，业务 DTO 解码用原始字节，
+	// 大整数不经过 float64 往返，避免 int64 精度丢失
+	var requestInfo RequestInfo[json.RawMessage]
 	if err := json.Unmarshal(body, &requestInfo); err != nil {
-		ctx.sendError(err)
+		ctx.send(internalError("invalid request body", err))
 		return
 	}
 	requestInfo.MethodName = firstLetterToUpper(requestInfo.MethodName)
@@ -51,11 +54,21 @@ func (f *Fun) handle(fastCtx *fasthttp.RequestCtx) {
 		return
 	}
 
-	ctx.Ip = ctx.remoteIP().String()
+	ctx.Ip = clientIP(fastCtx)
 	ctx.State = requestInfo.State
 	ctx.MethodName = requestInfo.MethodName
 	ctx.ServiceName = requestInfo.ServiceName
-	ctx.Data = requestInfo.Data
+	if requestInfo.Data != nil {
+		var dataMap map[string]any
+		if err := json.Unmarshal(*requestInfo.Data, &dataMap); err != nil {
+			ctx.send(internalError("invalid request data", err))
+			return
+		}
+		if dataMap != nil { // "data": null 视为未提供数据
+			ctx.Data = &dataMap
+			ctx.rawData = *requestInfo.Data
+		}
+	}
 
 	// 流式方法：响应保持打开，以 NDJSON 行推送（Streamable HTTP）
 	// streamCh != nil 表示流式方法；业务返回的 *Stream 在 invoke 内完成注入
@@ -72,6 +85,17 @@ func (f *Fun) handle(fastCtx *fasthttp.RequestCtx) {
 		fastCtx.Response.Header.Set("Cache-Control", "no-cache")
 		fastCtx.Response.Header.Set("Connection", "keep-alive")
 		fastCtx.SetBodyStreamWriter(func(w *bufio.Writer) {
+			// 流式写出运行在 fasthttp 的写出 goroutine 上，handle 的 defer 兜不住：
+			// 这里必须自行 recover，否则业务 Send 的值 MarshalJSON panic 会击穿进程。
+			// finish 保证 streamDone 恰好 close 一次，解除业务 Send 阻塞
+			var closeDone sync.Once
+			finish := func() { closeDone.Do(func() { close(streamDone) }) }
+			defer func() {
+				if v := recover(); v != nil {
+					ErrorLogger(fmt.Sprintf("fun: stream writer panic (%s.%s): %v", ctx.ServiceName, ctx.MethodName, v), "\n"+string(debug.Stack()))
+					finish()
+				}
+			}()
 			writeLine := func(v any) bool {
 				data, err := json.Marshal(v)
 				if err != nil {
@@ -94,24 +118,26 @@ func (f *Fun) handle(fastCtx *fasthttp.RequestCtx) {
 			// (T, stream, error)：T 作为流的第一条消息下发
 			if result.Data != nil {
 				if !writeLine(*result.Data) {
-					close(streamDone)
+					finish()
 					return
 				}
 			}
 			for message := range streamCh {
 				if !writeLine(message) {
-					close(streamDone)
+					finish()
 					return
 				}
 			}
-			close(streamDone)
+			finish()
 		})
 		return
 	}
 	ctx.send(*result)
 }
 
-// handlePanic 兜底处理 panic：归一为 error 后写回错误响应，并记录完整堆栈日志
+// handlePanic 兜底处理 panic：完整堆栈记日志；
+// 业务以 panic 抛出的 fun.Error 原样透传，其余 panic 只回通用错误——
+// panic 消息可能包含 SQL/内部路径等细节，不外泄给客户端
 func (f *Fun) handlePanic(c *Ctx) {
 	if v := recover(); v != nil {
 		var err error
@@ -121,7 +147,12 @@ func (f *Fun) handlePanic(c *Ctx) {
 			err = fmt.Errorf("panic (%s.%s): %v", c.ServiceName, c.MethodName, v)
 		}
 		ErrorLogger(err.Error(), "\n"+string(debug.Stack()))
-		c.sendError(err)
+		var result Result[any]
+		if errors.As(err, &result) {
+			c.sendError(err)
+			return
+		}
+		c.send(internalError("internal error", err))
 	}
 }
 
@@ -135,7 +166,9 @@ func (f *Fun) invoke(c *Ctx, streamCh *chan any, streamDone *chan struct{}) (*Re
 		return nil, errMethodNotFound
 	}
 
-	f.callGuard(c, c.ServiceName)
+	if err := f.callGuard(c, c.ServiceName); err != nil {
+		return nil, err
+	}
 
 	var args []reflect.Value
 	if method.dtoType != nil {
@@ -146,8 +179,17 @@ func (f *Fun) invoke(c *Ctx, streamCh *chan any, streamDone *chan struct{}) (*Re
 			return nil, err
 		}
 		dto := reflect.New(method.dtoType).Elem()
-		if err := convert(c.Data, dto.Addr().Interface()); err != nil {
-			return nil, err
+		// 优先按原始字节精确解码（不经 float64）；直接构造 Ctx 调 invoke（无 rawData）时回退 map 往返
+		var decodeErr error
+		if len(c.rawData) > 0 {
+			decodeErr = json.Unmarshal(c.rawData, dto.Addr().Interface())
+		} else {
+			decodeErr = convert(*c.Data, dto.Addr().Interface())
+		}
+		if decodeErr != nil {
+			// 客户端只收通用提示；详细原因记服务端日志，不外泄 Go 类型等内部信息
+			ErrorLogger("fun: decode request data (" + c.ServiceName + "." + c.MethodName + "): ", decodeErr.Error())
+			return nil, errInvalidData
 		}
 		args = append(args, dto)
 	}

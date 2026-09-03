@@ -3,8 +3,52 @@ package fun
 type templateTs struct{}
 
 func (ctx templateTs) genClientTemplate() string {
-	return `export type result<T> = {
-  id?: string;
+	return `// 大整数安全 JSON：超过 Number.MAX_SAFE_INTEGER（2^53-1）的整数字面量
+// 解析为 BigInt，序列化时 BigInt 还原为数字字面量——雪花 ID 等不再丢精度。
+// 自包含实现，不引入运行时依赖；如需换 json-bigint，替换下面两个函数即可
+const BIGINT_PREFIX = "\u0000fun-bigint:";
+
+function reviveBigint(value: any): any {
+  if (typeof value === "string" && value.startsWith(BIGINT_PREFIX) &&
+      /^-?\d+$/.test(value.slice(BIGINT_PREFIX.length))) {
+    return BigInt(value.slice(BIGINT_PREFIX.length));
+  }
+  if (Array.isArray(value)) return value.map(reviveBigint);
+  if (value !== null && typeof value === "object") {
+    for (const key of Object.keys(value)) value[key] = reviveBigint(value[key]);
+    return value;
+  }
+  return value;
+}
+
+function parseLossless(text: string): any {
+  // 先把超出安全范围的大整数包成带哨兵的字符串（正则的字符串分支优先，
+  // 字符串内容里的数字不受影响），JSON.parse 后再还原为 BigInt
+  const guarded = text.replace(
+    /"(?:[^"\\]|\\(?:["\\\/bfnrt]|u[0-9a-fA-F]{4}))*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+    token => {
+      if (token.startsWith('"')) return token;
+      if (!/[.eE]/.test(token) && !Number.isSafeInteger(Number(token))) {
+        // 哨兵必须以转义形式 \\u0000 写入文本（JSON 字符串禁止裸控制字符），
+        // JSON.parse 解码后即为 BIGINT_PREFIX（真实 NUL 开头）
+        return '"\\u0000fun-bigint:' + token + '"';
+      }
+      return token;
+    }
+  );
+  return reviveBigint(JSON.parse(guarded));
+}
+
+function stringifyLossless(value: any): string | undefined {
+  const raw = JSON.stringify(value, (_key, v) =>
+    typeof v === "bigint" ? BIGINT_PREFIX + v.toString() : v
+  );
+  if (raw === undefined) return undefined;
+  // 哨兵字符串在序列化文本中形如 "\u0000fun-bigint:123"（NUL 被转义），去引号还原为数字字面量
+  return raw.replace(/"\\u0000fun-bigint:(-?\d+)"/g, "$1");
+}
+
+export type result<T> = {
   code?: number;
   data?: T;
   msg?: string;
@@ -130,7 +174,7 @@ function parseResult(response: Response, text: string): result<any> {
 
   let value: unknown;
   try {
-    value = JSON.parse(body);
+    value = parseLossless(body);
   } catch {
     if (!response.ok) return externalFailure(response, excerpt(body));
     const type = mediaType(response);
@@ -260,7 +304,7 @@ export class Client {
 
     let body: string;
     try {
-      const serialized = JSON.stringify({
+      const serialized = stringifyLossless({
         serviceName,
         methodName,
         data: dto,
@@ -350,7 +394,7 @@ export class Client {
 
     let body: string;
     try {
-      const serialized = JSON.stringify({
+      const serialized = stringifyLossless({
         serviceName,
         methodName,
         data: dto,
@@ -464,7 +508,7 @@ export class Client {
       if (!payload) return;
       let data: T;
       try {
-        data = JSON.parse(payload) as T;
+        data = parseLossless(payload) as T;
       } catch (error) {
         failed = failure(1, ` + "`Invalid NDJSON at line ${lineNumber}: ${excerpt(payload)}`" + `);
         cause = error;

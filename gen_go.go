@@ -175,6 +175,11 @@ func (ctx GenGo) genStruct(t reflect.Type) *genImportType {
 			})
 		}
 
+		// 指针字段解引用后再检查嵌套类型，与 TS 生成器一致：
+		// 否则 *Enum/*Struct 字段的定义文件会被漏生成（Kind 是 Ptr，三个分支全跳过）
+		if fieldType.Kind() == reflect.Ptr {
+			fieldType = fieldType.Elem()
+		}
 		if fieldType.Kind() == reflect.Struct {
 			ctx.genStruct(fieldType)
 		}

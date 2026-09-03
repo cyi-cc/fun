@@ -29,8 +29,9 @@ var guardHit = false
 
 type TestGuard struct{}
 
-func (g *TestGuard) Guard(ctx Ctx) {
+func (g *TestGuard) Guard(ctx Ctx) error {
 	guardHit = true
+	return nil
 }
 
 func (s *TestSvc) Hello(dto TestDto) (string, error) {
@@ -58,7 +59,9 @@ func (s *TestSvc) Count(dto TestDto) (*Stream, error) {
 func TestCtxBoxInject(t *testing.T) {
 	f := New()
 	guardHit = false
-	f.BindService(&TestSvc{}, &TestGuard{})
+	if err := f.BindService(&TestSvc{}, &TestGuard{}); err != nil {
+		t.Fatal(err)
+	}
 	c := &Ctx{Ip: "1.2.3.4", MethodName: "Hello", ServiceName: "TestSvc"}
 	data := map[string]any{"name": "tom", "age": 1}
 	c.Data = &data
@@ -79,7 +82,9 @@ func TestCtxBoxInject(t *testing.T) {
 
 func TestCheckDtoRequired(t *testing.T) {
 	f := New()
-	f.BindService(&TestSvc{})
+	if err := f.BindService(&TestSvc{}); err != nil {
+		t.Fatal(err)
+	}
 	c := &Ctx{Ip: "x", MethodName: "Hello", ServiceName: "TestSvc"}
 	data := map[string]any{"age": 1}
 	c.Data = &data
@@ -94,7 +99,9 @@ func TestCheckDtoRequired(t *testing.T) {
 
 func TestGenCode(t *testing.T) {
 	isolateGeneratorGlobals(t)
-	GetFun().BindService(&TestSvc{})
+	if err := GetFun().BindService(&TestSvc{}); err != nil {
+		t.Fatal(err)
+	}
 	SetOutput(t.TempDir())
 	GenCode(GenGo{}, GenTs{})
 	if _, err := os.Stat(filepath.Join(getDirectory(), "go", "test_svc.go")); err != nil {
@@ -107,7 +114,9 @@ func TestGenCode(t *testing.T) {
 
 func startServer(t *testing.T, port uint16) *Fun {
 	f := New()
-	f.BindService(&TestSvc{})
+	if err := f.BindService(&TestSvc{}); err != nil {
+		t.Fatal(err)
+	}
 	go f.Start(port)
 	time.Sleep(300 * time.Millisecond)
 	return f

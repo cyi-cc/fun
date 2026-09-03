@@ -24,14 +24,15 @@ const (
 )
 
 var logChan = make(chan string, 100)
-var logWg sync.WaitGroup
 
 const (
 	TerminalMode uint8 = iota
 	FileMode
 )
 
-var logMutex sync.Mutex
+var logMutex sync.Mutex // 串行化实际写出（后台 worker 与通道满时的同步兜底）
+
+var loggerMu sync.RWMutex // 保护 logger 配置的读写，消除 ConfigLogger 数据竞争
 
 type Logger struct {
 	Level          uint8
@@ -59,11 +60,12 @@ func init() {
 func logWriterWorker() {
 	for text := range logChan {
 		logMutex.Lock()
-		if logger.Mode == FileMode {
+		if currentLogger().Mode == FileMode {
 			fileLogger(text)
 		} else {
 			fmt.Println(text)
 		}
+		logMutex.Unlock()
 	}
 }
 
@@ -74,11 +76,18 @@ func deleteLogWorker() {
 	for {
 		select {
 		case <-ticker.C:
-			if logger.Mode == FileMode {
+			if currentLogger().Mode == FileMode {
 				cleanupExpiredLogs()
 			}
 		}
 	}
+}
+
+// currentLogger 读取当前日志配置快照，避免与 ConfigLogger 的数据竞争
+func currentLogger() Logger {
+	loggerMu.RLock()
+	defer loggerMu.RUnlock()
+	return logger
 }
 
 func getLogFilePath() string {
@@ -89,7 +98,8 @@ func getLogFilePath() string {
 }
 
 func cleanupExpiredLogs() {
-	if logger.ExpireLogsDays <= 0 {
+	cfg := currentLogger()
+	if cfg.ExpireLogsDays <= 0 {
 		return
 	}
 	_, err := os.Stat(getLogFilePath())
@@ -124,24 +134,24 @@ func cleanupExpiredLogs() {
 	}
 }
 
+// getFileNameInfo 解析日志文件名 "日期.log.序号"。
+// 解析失败仅视为非托管文件并跳过——绝不删除：日志目录里用户放入的
+// 任何无关文件（配置、说明）不属于框架管辖范围
 func getFileNameInfo(name string) fileName {
 	fileNameParts := strings.Split(name, ".log.")
 	if len(fileNameParts) != 2 {
-		deleteLog(name)
 		return fileName{}
 	}
 	dateLayout := "2006-01-02"
 	dateString := fileNameParts[0]
 	fileDate, err := time.Parse(dateLayout, dateString)
 	if err != nil {
-		deleteLog(name)
 		return fileName{}
 	}
 	indexString := fileNameParts[1]
 	indexString = strings.TrimSuffix(indexString, ".log")
 	fileIndex, err := strconv.ParseInt(indexString, 10, 32)
 	if err != nil {
-		deleteLog(name)
 		return fileName{}
 	}
 	return fileName{
@@ -189,10 +199,11 @@ func fileLogger(text string) {
 }
 
 func removeOldestLogFile(entries []os.DirEntry) {
-	if logger.MaxNumberFiles == 0 {
+	cfg := currentLogger()
+	if cfg.MaxNumberFiles == 0 {
 		return
 	}
-	if uint64(len(entries)) < logger.MaxNumberFiles {
+	if uint64(len(entries)) < cfg.MaxNumberFiles {
 		return
 	}
 	var newEntries []fileName
@@ -202,10 +213,10 @@ func removeOldestLogFile(entries []os.DirEntry) {
 			newEntries = append(newEntries, fileNameInfo)
 		}
 	}
-	if uint64(len(newEntries)) < logger.MaxNumberFiles {
+	if uint64(len(newEntries)) < cfg.MaxNumberFiles {
 		return
 	}
-	delNum := uint64(len(newEntries)) - logger.MaxNumberFiles + 1
+	delNum := uint64(len(newEntries)) - cfg.MaxNumberFiles + 1
 	sort.Slice(newEntries, func(i, j int) bool {
 		if newEntries[i].LoggerTime != newEntries[j].LoggerTime {
 			return newEntries[i].LoggerTime < newEntries[j].LoggerTime
@@ -247,7 +258,7 @@ func getNextLogFile(dirPath, dateStr string, text string) (string, error) {
 		removeOldestLogFile(entries)
 		return filepath.Join(dirPath, dateStr+".log.1"), nil
 	}
-	if logger.MaxSizeFile > 0 && maxIndex > 0 {
+	if currentLogger().MaxSizeFile > 0 && maxIndex > 0 {
 		currentFile := filepath.Join(dirPath, fmt.Sprintf("%s.log.%d", dateStr, maxIndex))
 		if fileInfo, err := os.Stat(currentFile); err == nil {
 			maxSizeBytes := int64(logger.MaxSizeFile) * 1024 * 1024
@@ -263,7 +274,9 @@ func getNextLogFile(dirPath, dateStr string, text string) (string, error) {
 }
 
 func ConfigLogger(log Logger) {
+	loggerMu.Lock()
 	logger = log
+	loggerMu.Unlock()
 }
 
 func getCurrentTime() string {
@@ -304,7 +317,8 @@ func getLevelName(level uint8) string {
 }
 
 func sendLogWorker(level uint8, message []any) {
-	if logger.Level >= level {
+	cfg := currentLogger()
+	if cfg.Level >= level {
 		var text1 strings.Builder
 		for _, m := range message {
 			var msgStr string
@@ -350,8 +364,18 @@ func sendLogWorker(level uint8, message []any) {
 			text1.WriteString(msgStr + " ")
 		}
 		text := "[" + getCurrentTime() + "] [" + padString(getLevelName(level), 7) + "] " + getMethodNameLogger() + text1.String()
-		logWg.Add(1)
-		logChan <- text
+		select {
+		case logChan <- text:
+		default:
+			// 通道满时同步写出兜底：日志绝不阻塞（也绝不丢弃）请求处理 goroutine
+			logMutex.Lock()
+			if cfg.Mode == FileMode {
+				fileLogger(text)
+			} else {
+				fmt.Println(text)
+			}
+			logMutex.Unlock()
+		}
 	}
 }
 

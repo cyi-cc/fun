@@ -66,7 +66,9 @@ func streamPost(t *testing.T, url, method string) (*http.Response, []byte) {
 
 func TestServerStreamContentTypeAndEmptyStream(t *testing.T) {
 	f := New()
-	f.BindService(&ProtocolStreamSvc{})
+	if err := f.BindService(&ProtocolStreamSvc{}); err != nil {
+		t.Fatal(err)
+	}
 	response, body := streamPost(t, serveFun(t, f), "Empty")
 	if got := response.Header.Get("Content-Type"); got != "application/x-ndjson" {
 		t.Fatalf("Content-Type = %q", got)
@@ -78,7 +80,9 @@ func TestServerStreamContentTypeAndEmptyStream(t *testing.T) {
 
 func TestServerStreamSetupErrorsUseResultProtocol(t *testing.T) {
 	f := New()
-	f.BindService(&ProtocolStreamSvc{})
+	if err := f.BindService(&ProtocolStreamSvc{}); err != nil {
+		t.Fatal(err)
+	}
 	url := serveFun(t, f)
 	for _, test := range []struct {
 		method string

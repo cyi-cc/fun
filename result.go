@@ -12,7 +12,6 @@ const (
 )
 
 type Result[T any] struct {
-	Id     string  `json:"id,omitempty"`
 	Code   *uint16 `json:"code,omitempty"`
 	Data   *T      `json:"data,omitempty"`
 	Msg    *string `json:"msg,omitempty"`
@@ -38,6 +37,13 @@ func Error(code uint16, msg string) error {
 
 func callError(err error) Result[any] {
 	return Result[any]{Msg: new(err.Error()), Status: cellErrorCode}
+}
+
+// internalError 框架内部错误脱敏：客户端只收到固定提示，
+// 完整错误（JSON 解析细节、Go 类型名等）记服务端日志，不外泄
+func internalError(clientMsg string, err error) Result[any] {
+	ErrorLogger("fun: internal error: ", err.Error())
+	return Result[any]{Msg: &clientMsg, Status: cellErrorCode}
 }
 
 // success 构造成功响应,空切片规范化为 [] 而不是 null

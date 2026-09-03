@@ -2,28 +2,31 @@ package fun
 
 import (
 	"net"
-	"net/http"
 	"strings"
+
+	"github.com/valyala/fasthttp"
 )
 
-// getIP 获取客户端真实 IP
-// 优先级：X-Forwarded-For > X-Real-IP > RemoteAddr
-func getIP(r *http.Request) string {
-	// 1. 优先获取真实 IP（多层代理时取最后一个非空段）
-	if ip := lastNonEmpty(r.Header.Get("X-Forwarded-For")); ip != "" {
+// clientIP 解析客户端真实 IP。
+// 优先级：X-Forwarded-For > X-Real-IP > RemoteAddr。
+// 部署在反向代理（nginx 等）后时由代理写入这两个头；
+// 直连无代理头时回退到连接对端地址
+func clientIP(ctx *fasthttp.RequestCtx) string {
+	// 1. X-Forwarded-For 取最后一个非空段：
+	// 该段由离服务最近的一层代理追加，是代理链中最可信的一段
+	if ip := lastNonEmpty(string(ctx.Request.Header.Peek("X-Forwarded-For"))); ip != "" {
 		return toLoopback(ip)
 	}
 
-	// 2. X-Real-IP（通常由 Nginx 设置）
-	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
+	// 2. X-Real-IP（通常由 nginx 设置）
+	if ip := strings.TrimSpace(string(ctx.Request.Header.Peek("X-Real-IP"))); ip != "" {
 		return toLoopback(ip)
 	}
 
-	// 3. 最终回退到 RemoteAddr（兼容带端口、IPv6 方括号、无端口）
-	if ip := hostOf(r.RemoteAddr); ip != "" {
-		return toLoopback(ip)
+	// 3. 回退到连接对端地址；无对端或未指定地址（0.0.0.0，测试/直驱场景）按本机处理
+	if remote := ctx.RemoteIP(); remote != nil && !remote.IsUnspecified() {
+		return toLoopback(remote.String())
 	}
-
 	return "127.0.0.1"
 }
 
@@ -37,18 +40,6 @@ func lastNonEmpty(xff string) string {
 		}
 	}
 	return ""
-}
-
-// hostOf 从 RemoteAddr 中提取 IP 部分
-// "203.0.113.9:4567" → "203.0.113.9"，"[::1]:4567" → "::1"，
-// "198.51.100.88"（无端口）→ 原样返回
-func hostOf(remoteAddr string) string {
-	raw := strings.TrimSpace(remoteAddr)
-	host, _, err := net.SplitHostPort(raw)
-	if err == nil && host != "" {
-		return host
-	}
-	return raw
 }
 
 // toLoopback 回环地址统一返回 127.0.0.1，其余原样返回
