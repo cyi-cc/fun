@@ -1,6 +1,6 @@
 # fun 框架（github.com/cyi-cc/fun）使用文档
 
-> 适用版本：**v1.3.2**（当前最新发布）。基于 fasthttp 的单端点 RPC 框架，
+> 适用版本：**v1.3.3**（当前最新发布）。基于 fasthttp 的单端点 RPC 框架，
 > 自带依赖注入、Guard 鉴权、NDJSON 流式响应、自定义路由与 TypeScript 客户端生成。
 
 ## 版本沿革
@@ -11,6 +11,7 @@
 | v1.3.0 | BindRoute 通配符路由 `/prefix/*`，`RouteCtx.Wildcard` 取剩余路径 |
 | v1.3.1 | TS 客户端可靠性：所有失败统一归一为 Result 并经过响应拦截器 |
 | v1.3.2 | 每请求上下文（request/stream options + `state`）与免基础设施的生成期注册 `BindServiceForGen` |
+| v1.3.3 | 新增 `SetBodyLimit`：自定义路由可放宽请求体上限，支持大体积 multipart 上传 |
 
 ## 1. 启动与服务注册
 
@@ -77,7 +78,19 @@ f.BindRoute("GET", "/image/*", func(c *fun.RouteCtx) error {
 ```
 
 - 精确路由优先于通配符；`/cell` 保留；方法大小写不敏感。
-- 查询参数与 form 表单合并进 `c.Param(name)`；multipart 不支持（转 base64 走 /cell）。
+- 查询参数与 form 表单合并进 `c.Param(name)`；`Param` 只解析
+  `application/x-www-form-urlencoded`，multipart 不合并。
+- **multipart/大请求体（v1.3.3+）**：默认请求体上限为 fasthttp 的 4MB。大体积
+  multipart 上传用 `SetBodyLimit` 在 `Start` 前放宽，处理器里经 `c.RequestCtx`
+  直接读 multipart 内容（如 `c.RequestCtx.MultipartForm()`）：
+
+```go
+f.SetBodyLimit(64 << 20) // 64MB；0 或负数恢复 fasthttp 默认 4MB
+f.BindRoute("POST", "/upload", func(c *fun.RouteCtx) error {
+    c.RequestCtx.WriteString("…")
+    return nil
+})
+```
 
 ## 6. 流式响应（NDJSON）
 
@@ -106,8 +119,10 @@ fun.GenCode(fun.GenTs{})
 
 - `BindServiceForGen` 不触发 Box 装配，生成命令**不需要数据库/Redis 在运行**。
 - 生成确定性：service/method/imports 全部源端排序，重复生成字节一致。
-- 产物：`client.ts`（Client + `result<T>`）、每服务一个 `<service>.ts`、DTO/View 类型、
+- 产物固定落在 `<out>/ts/` 子目录（用 `GenGo` 则是 `<out>/go/`）：
+  `client.ts`（Client + `result<T>`）、每服务一个 `<service>.ts`、DTO/View 类型、
   `fun.ts`（`api.create(url)` 聚合入口，服务属性首字母小写）。
+  需要拍平到目录根时，生成后自行把文件从 `ts/` 上移一层。
 
 ### 每调用选项（v1.3.2）
 
