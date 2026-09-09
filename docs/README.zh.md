@@ -1,6 +1,6 @@
 # fun 框架（github.com/cyi-cc/fun）使用文档
 
-> 适用版本：**v1.3.3**（当前最新发布）。基于 fasthttp 的单端点 RPC 框架，
+> 适用版本：**v1.3.5**（当前最新发布）。基于 fasthttp 的单端点 RPC 框架，
 > 自带依赖注入、Guard 鉴权、NDJSON 流式响应、自定义路由与 TypeScript 客户端生成。
 
 ## 版本沿革
@@ -12,6 +12,8 @@
 | v1.3.1 | TS 客户端可靠性：所有失败统一归一为 Result 并经过响应拦截器 |
 | v1.3.2 | 每请求上下文（request/stream options + `state`）与免基础设施的生成期注册 `BindServiceForGen` |
 | v1.3.3 | 新增 `SetBodyLimit`：自定义路由可放宽请求体上限，支持大体积 multipart 上传 |
+| v1.3.4 | 错误通道 API、正确性修复与服务端加固 |
+| v1.3.5 | 新增 `CORS`：来源白名单按需放行，预检 204 直答，覆盖 `/cell` 与全部自定义路由 |
 
 ## 1. 启动与服务注册
 
@@ -92,7 +94,22 @@ f.BindRoute("POST", "/upload", func(c *fun.RouteCtx) error {
 })
 ```
 
-## 6. 流式响应（NDJSON）
+## 6. CORS 跨域
+
+```go
+f.CORS("https://a.com", "https://b.com") // Start 前调用，可变参数白名单
+```
+
+- **按需放行**：请求 Origin 命中白名单（大小写不敏感）才回显该来源并允许
+  携带凭据（`Access-Control-Allow-Credentials: true`）；未命中不附加任何
+  CORS 头，交给浏览器自然拦截。
+- **覆盖全部端点**：`/cell`、自定义路由与通配路由统一生效；预检请求
+  （OPTIONS + `Access-Control-Request-Method`）由框架直接以 204 应答，
+  不进入业务处理；请求头按 `Access-Control-Request-Headers` 回显，
+  预检结果缓存 24h。
+- 未调用 `CORS` 则不附加任何跨域头，行为与之前完全一致。
+
+## 7. 流式响应（NDJSON）
 
 ```go
 st := &fun.Stream{}
@@ -108,7 +125,7 @@ return st, nil
 `Content-Type: application/x-ndjson`，每行一个 JSON；合法零消息流正常结束；
 业务出错在建流前返回普通 Result；`OnClose` 注册清理回调。
 
-## 7. TS 客户端生成与请求上下文（v1.3.2 核心）
+## 8. TS 客户端生成与请求上下文（v1.3.2 核心）
 
 ```go
 f := fun.GetFun()
@@ -153,17 +170,17 @@ c.addResponseInterceptor((svc, m, result, context) => {
 旧三参签名仍兼容。所有失败（网络、HTTP、HTML、非法 JSON、取消、拦截器异常）
 统一归一为 Result 并**必经响应拦截器**，不存在绕过拦截器的错误路径。
 
-## 8. 依赖注入（box.go）
+## 9. 依赖注入（box.go）
 
 - `fun.Wired[T]()`：按 `*T` 建单例；先注入 `fun:"auto"` 字段（缺则递归创建），
   再调 `New()`（无参；连接类资源在此初始化，失败可 log.Fatalf）。
 - 启动顺序：先 `Wired` 基础配置/平台单例，再 `BindService`。
 
-## 9. 常见坑
+## 10. 常见坑
 
 - DTO 用普通 `int`/float/map → 注册期 panic；用 int64/字符串/指针。
 - 非指针字段漏传 → 运行期 "must be a pointer or have a corresponding field"。
 - 流式忘记 `Close()` → 客户端挂起；连接断开后 `Send` 返回 error，循环须检查。
 - 方法首字母小写 = 不注册；客户端报 method not found。
-- vite 代理需重写前缀：`/api/cell → /cell`。
+- vite 代理需重写前缀：`/api/cell → /cell`；或服务端 `f.CORS` 加白名单放开浏览器直连。
 - 生成用 `BindService`（而非 `BindServiceForGen`）会把基础设施拉起来 —— 生成命令请用后者。

@@ -25,6 +25,8 @@ type Fun struct {
 	idleTimeout    time.Duration // keep-alive 空闲超时，默认 120s
 	maxConcurrency int           // 最大并发连接数；0 = 不限制
 
+	corsOrigins  map[string]struct{}   // CORS 来源白名单（小写比较）；nil/空表示未开启
+
 	server  atomic.Pointer[fasthttp.Server]
 	started atomic.Bool
 

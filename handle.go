@@ -18,6 +18,11 @@ func (f *Fun) handle(fastCtx *fasthttp.RequestCtx) {
 	ctx := &Ctx{RequestCtx: fastCtx}
 	defer f.handlePanic(ctx)
 
+	// CORS 置于路由之前：预检请求在此直接应答，实际请求附加跨域头后继续正常分发
+	if f.handleCors(fastCtx) {
+		return
+	}
+
 	method, path := string(fastCtx.Method()), string(fastCtx.Path())
 	if r, ok := f.routes[method+" "+path]; ok {
 		f.handleRoute(fastCtx, r, "")
