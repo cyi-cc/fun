@@ -66,6 +66,23 @@ export type RequestOptions = {
 export type StreamOptions = {
   signal?: AbortSignal;
   state?: Record<string, string>;
+  /**
+   * 原生断线重连：流因传输失败（status 4/5）结束时按指数退避自动重连。
+   * dto 传工厂函数时每次重连重新求值，用于刷新续传游标。
+   * 未传时关闭（默认），与 request 语义一致。
+   */
+  retry?: StreamRetryOptions | false;
+  /** 空闲看门狗：超过该毫秒数未收到任何字节（含心跳空行）即判定流死亡并走重连。0 关闭。 */
+  idleTimeoutMs?: number;
+};
+
+export type StreamRetryOptions = {
+  /** 最大重连次数，默认 Infinity（直到 signal 取消或成功）。 */
+  maxAttempts?: number;
+  /** 首次重连延迟（毫秒），默认 500。 */
+  baseDelayMs?: number;
+  /** 退避上限（毫秒），默认 10000。实际延迟为指数退避 × 0.75~1.25 抖动。 */
+  maxDelayMs?: number;
 };
 
 export type RequestInterceptor = (
@@ -344,6 +361,46 @@ export class Client {
   async stream<T>(
     serviceName: string,
     methodName: string,
+    dto: any | undefined | (() => any | undefined),
+    onMessage: (data: T) => unknown,
+    options?: StreamOptions
+  ): Promise<result<void>> {
+    // dto 工厂：重连时重新求值，用于刷新续传游标（如 afterId）
+    const getDto = typeof dto === "function" ? (dto as () => any | undefined) : () => dto;
+    // 重连默认关闭（与 request 语义一致）；传 retry: {...} 显式开启
+    const retry = options?.retry
+      ? {
+          maxAttempts: Infinity,
+          baseDelayMs: 500,
+          maxDelayMs: 10000,
+          ...options.retry,
+        }
+      : null;
+    for (let attempt = 0; ; attempt++) {
+      const r = await this.streamOnce<T>(serviceName, methodName, getDto(), onMessage, options);
+      // 0 成功、1 协议错误、2 业务错误：终结态，不重连
+      if (r.status !== 4 && r.status !== 5) return r;
+      if (!retry) return r;
+      if (options?.signal?.aborted) return r;
+      if (attempt + 1 > retry.maxAttempts) return r;
+      const delay =
+        Math.min(retry.maxDelayMs, retry.baseDelayMs * 2 ** attempt) * (0.75 + Math.random() * 0.5);
+      // 退避等待：AbortSignal.timeout 免定时器 API，且后台标签页照常走时
+      await new Promise<void>((resolve) => {
+        if (options?.signal?.aborted) {
+          resolve();
+          return;
+        }
+        AbortSignal.timeout(delay).addEventListener("abort", () => resolve(), { once: true });
+        options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      if (options?.signal?.aborted) return r;
+    }
+  }
+
+  private async streamOnce<T>(
+    serviceName: string,
+    methodName: string,
     dto: any | undefined,
     onMessage: (data: T) => unknown,
     options?: StreamOptions
@@ -523,13 +580,30 @@ export class Client {
     };
 
     try {
+      // 空闲看门狗：idleTimeoutMs 内未收到任何字节（含心跳空行）判定流死亡，
+      // 抛出哨兵错误 → status 5 → 交给上层重连。服务端 25s 心跳时建议 35000。
+      const STREAM_IDLE = Symbol("stream-idle");
       for (;;) {
         let part: ReadableStreamReadResult<Uint8Array>;
         try {
-          part = await reader.read();
+          if (options?.idleTimeoutMs) {
+            const idlePromise = new Promise<never>((_, reject) => {
+              AbortSignal.timeout(options.idleTimeoutMs!).addEventListener(
+                "abort",
+                () => reject(STREAM_IDLE),
+                { once: true }
+              );
+            });
+            idlePromise.catch(() => {}); // read 先返回时防 unhandled rejection
+            part = await Promise.race([reader.read(), idlePromise]);
+          } else {
+            part = await reader.read();
+          }
         } catch (error) {
           cause = error;
-          if (isTimeout(error, options?.signal)) {
+          if (error === STREAM_IDLE) {
+            failed = failure(5, "Stream idle timeout");
+          } else if (isTimeout(error, options?.signal)) {
             failed = failure(5, "Stream timed out");
           } else if (options?.signal?.aborted === true) {
             failed = failure(4, "Stream aborted");
@@ -631,7 +705,7 @@ export default class {{.ServiceName}} {
   }
   {{- $serviceName := .ServiceName }}
   {{- range .GenMethodTypeList}}
-  {{if .IsStream }}async {{.MethodName}}({{if .DtoText}}{{.DtoText}}, {{end}}onMessage: (data: {{.GenericTypeText}}) => unknown, options?: StreamOptions): Promise<result<void>> {
+  {{if .IsStream }}async {{.MethodName}}({{if .DtoText}}dto: {{.DtoText}} | (() => {{.DtoText}}), {{end}}onMessage: (data: {{.GenericTypeText}}) => unknown, options?: StreamOptions): Promise<result<void>> {
     return await this.client.stream<{{.GenericTypeText}}>("{{$serviceName}}", "{{.MethodName}}", {{if .DtoText}}dto{{else}}undefined{{end}}, onMessage, options)
   }{{else}}async {{.MethodName}}({{if .DtoText}}{{.DtoText}}, {{end}}options?: RequestOptions): Promise<{{.ReturnValueText}}> {
     return await this.client.request<{{.GenericTypeText}}>("{{$serviceName}}", "{{.MethodName}}", {{if .DtoText}}dto{{else}}undefined{{end}}, options)

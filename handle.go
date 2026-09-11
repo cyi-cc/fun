@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/valyala/fasthttp"
 )
@@ -127,13 +128,29 @@ func (f *Fun) handle(fastCtx *fasthttp.RequestCtx) {
 					return
 				}
 			}
-			for message := range streamCh {
-				if !writeLine(message) {
-					finish()
-					return
+			// 空闲心跳：业务长时间不 Send 时周期写一个空行。NDJSON 解析器
+			// 跳过空行（业务无感知），字节能让 NAT/CDN 的空闲计时器归零。
+			// 25s 需小于常见中间盒阈值（移动 CGNAT 约 60s、CDN 约 120s）。
+			heartbeat := time.NewTicker(25 * time.Second)
+			defer heartbeat.Stop()
+			for {
+				select {
+				case message, ok := <-streamCh:
+					if !ok {
+						finish()
+						return
+					}
+					if !writeLine(message) {
+						finish()
+						return
+					}
+				case <-heartbeat.C:
+					if _, err := w.WriteString("\n"); err != nil || w.Flush() != nil {
+						finish()
+						return
+					}
 				}
 			}
-			finish()
 		})
 		return
 	}
