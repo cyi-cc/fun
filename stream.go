@@ -67,14 +67,19 @@ func (s *Stream) Close() {
 	close(s.ch)
 }
 
-// OnClose 注册关闭回调；流已关闭时立即执行
+// OnClose 注册关闭回调；可在业务方法 return *Stream 之前同步调用。
+// 不得等待 Inject：Inject 只有业务方法返回后才发生，等待会形成循环依赖死锁。
+// 流已关闭时在锁外立即执行回调，避免回调重入 Stream 时自锁。
 func (s *Stream) OnClose(cb func()) {
-	<-s.getReady()
+	if cb == nil {
+		return
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		cb()
 		return
 	}
 	s.onClose = cb
+	s.mu.Unlock()
 }
