@@ -14,17 +14,17 @@ import (
 
 type ProtocolStreamSvc struct{}
 
-func (*ProtocolStreamSvc) Empty() (*Stream, error) {
-	stream := &Stream{}
+func (*ProtocolStreamSvc) Empty() (*Stream[any], error) {
+	stream := &Stream[any]{}
 	go stream.Close()
 	return stream, nil
 }
 
-func (*ProtocolStreamSvc) Before() (*Stream, error) {
+func (*ProtocolStreamSvc) Before() (*Stream[any], error) {
 	return nil, errors.New("before stream")
 }
 
-func (*ProtocolStreamSvc) Business() (*Stream, error) {
+func (*ProtocolStreamSvc) Business() (*Stream[any], error) {
 	return nil, Error(4201, "business before stream")
 }
 

@@ -6,10 +6,10 @@ NDJSON 流式响应、自定义路由与 TypeScript 客户端生成。
 
 ## 特性
 
-- **单端点 RPC**：`POST /cell`，方法签名 `(error)`、`(T, error)`、`(stream, error)`、`(T, stream, error)`
+- **单端点 RPC**：`POST /cell`，方法签名 `(error)`、`(T, error)`、`(*Stream[T], error)`
 - **依赖注入**：`fun.Wired[T]()` 建单例，`auto` 标签字段递归装配，`New()` 初始化连接资源
 - **Guard 鉴权**：全局 + 服务级中间件，panic 兜底转统一错误响应
-- **NDJSON 流式**：`*fun.Stream` 逐行推送，支持首条消息 + 后续流
+- **NDJSON 流式**：`*fun.Stream[T]` 逐行推送，消息类型由类型实参声明
 - **自定义路由**（v1.3.0+）：`BindRoute` 注册 GET/POST 回调、健康检查、通配符路径
 - **请求体上限控制**（v1.3.3+）：`SetBodyLimit` 支持大体积 multipart 上传
 - **CORS 跨域**（v1.3.5+）：`f.CORS(origins ...string)` 白名单按需放行，预检 204 直答，覆盖 `/cell` 与全部自定义路由

@@ -120,7 +120,11 @@ func TestBindRouteErrorAndCellUnaffected(t *testing.T) {
 func TestBindRoutePanics(t *testing.T) {
 	f := New()
 	catch := func(fn func()) (msg string) {
-		defer func() { msg = fmt.Sprint(recover()) }()
+		defer func() {
+			if r := recover(); r != nil {
+				msg = fmt.Sprint(r)
+			}
+		}()
 		fn()
 		return ""
 	}

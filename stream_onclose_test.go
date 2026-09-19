@@ -11,7 +11,7 @@ import (
 //
 //	business OnClose -> wait ready -> invoke wait business return -> never Inject.
 func TestStreamOnCloseBeforeInjectDoesNotBlock(t *testing.T) {
-	st := &Stream{}
+	st := &Stream[any]{}
 	registered := make(chan struct{})
 	var called atomic.Int32
 	go func() {
@@ -35,7 +35,7 @@ func TestStreamOnCloseBeforeInjectDoesNotBlock(t *testing.T) {
 }
 
 func TestStreamOnCloseAfterAlreadyClosedRunsImmediately(t *testing.T) {
-	st := &Stream{}
+	st := &Stream[any]{}
 	st.Inject(make(chan any), make(chan struct{}))
 	st.Close()
 	var called atomic.Int32

@@ -13,19 +13,19 @@ import (
 
 type Fun struct {
 	methods        map[string]methodInfo
-	routes         map[string]boundRoute     // 自定义路由："GET /path" → 绑定的处理器与 Guard（精确匹配）
+	routes         map[string]boundRoute      // 自定义路由："GET /path" → 绑定的处理器与 Guard（精确匹配）
 	wildcardRoutes map[string][]wildcardRoute // 通配路由，按 HTTP 方法
-	boxes          *sync.Map                 // 依赖容器：reflect.Type → boxEntry（单例或粘性错误）
-	guards         []*any                    // 全局 Guard
-	serviceGuards  map[string][]*any         // 服务级 Guard，按服务名
-	bodyLimit      int                       // 请求体上限（字节）；0 = fasthttp 默认 4MB
+	boxes          *sync.Map                  // 依赖容器：reflect.Type → boxEntry（单例或粘性错误）
+	guards         []*any                     // 全局 Guard
+	serviceGuards  map[string][]*any          // 服务级 Guard，按服务名
+	bodyLimit      int                        // 请求体上限（字节）；0 = fasthttp 默认 4MB
 
 	readTimeout    time.Duration // 读超时，默认 60s（slowloris 防线）
 	writeTimeout   time.Duration // 写超时，默认 0 不限制（避免掐断长流式响应）
 	idleTimeout    time.Duration // keep-alive 空闲超时，默认 120s
 	maxConcurrency int           // 最大并发连接数；0 = 不限制
 
-	corsOrigins  map[string]struct{}   // CORS 来源白名单（小写比较）；nil/空表示未开启
+	corsOrigins map[string]struct{} // CORS 来源白名单（小写比较）；nil/空表示未开启
 
 	server  atomic.Pointer[fasthttp.Server]
 	started atomic.Bool
@@ -69,8 +69,7 @@ type wildcardRoute struct {
 }
 
 var (
-	errorType  = reflect.TypeFor[error]()
-	streamType = reflect.TypeFor[*Stream]()
+	errorType = reflect.TypeFor[error]()
 )
 
 var (
@@ -83,7 +82,7 @@ type methodInfo struct {
 	serviceType reflect.Type // 服务值类型（非指针），每请求新建实例
 	methodIndex int          // 方法在实例上的反射索引
 	dtoType     reflect.Type // DTO 参数类型，无参数时为 nil
-	isStream    bool         // 返回签名带 *Stream，响应走 NDJSON 流式
+	isStream    bool         // 返回签名带 *Stream[T]，响应走 NDJSON 流式
 }
 
 func newFun() *Fun {
@@ -122,7 +121,7 @@ func GetFun() *Fun {
 // BindService 注册服务，要求传入指向结构体的指针
 // 方法签名约束：
 //   - 参数：最多一个，且必须是 struct（作为 DTO）
-//   - 返回值：只支持四种签名——(error)、(T, error)、(stream, error)、(T, stream, error)
+//   - 返回值：只支持三种签名——(error)、(T, error)、(*Stream[T], error)
 //
 // guardList 为该服务绑定的 Guard，方法调用前按注册顺序执行。
 // 依赖装配失败（New() 返回 error）以 error 返回，由调用方决定退出或降级；
@@ -188,31 +187,34 @@ func (f *Fun) bindServiceMethods(t reflect.Type, name string) {
 			checkType(dtoType)
 		}
 
-		// 返回值只支持四种签名：error / (T, error) / (stream, error) / (T, stream, error)
+		// 返回值只支持三种签名：error / (T, error) / (*Stream[T], error)
 		isStream := false
 		switch mt.NumOut() {
 		case 1:
 			// 情况 1：func(...) error
 			if mt.Out(0) != errorType {
-				panic(fmt.Sprintf("fun: method %s must return (error), (T, error), (stream, error) or (T, stream, error)", m.Name))
+				panic(fmt.Sprintf("fun: method %s must return (error), (T, error) or (*Stream[T], error)", m.Name))
 			}
 		case 2:
-			// 情况 2：func(...) (T, error) 或 func(...) (*Stream, error)
+			// 情况 2：func(...) (T, error) 或 func(...) (*Stream[T], error)
 			if mt.Out(1) != errorType {
 				panic(fmt.Sprintf("fun: method %s last return value must be error", m.Name))
 			}
-			isStream = mt.Out(0) == streamType
-		case 3:
-			// 情况 3：func(...) (T, *Stream, error)
-			if mt.Out(2) != errorType {
-				panic(fmt.Sprintf("fun: method %s last return value must be error", m.Name))
-			}
-			if mt.Out(1) != streamType {
-				panic(fmt.Sprintf("fun: method %s second return value must be *Stream", m.Name))
-			}
-			isStream = true
+			isStream = streamMsgType(mt.Out(0)) != nil
 		default:
-			panic(fmt.Sprintf("fun: method %s must return (error), (T, error), (stream, error) or (T, stream, error)", m.Name))
+			panic(fmt.Sprintf("fun: method %s must return (error), (T, error) or (*Stream[T], error)", m.Name))
+		}
+
+		// 数据返回 T 与 DTO 同受类型系统约束；流式校验消息类型 T
+		// （Stream[any] 是显式的任意消息流，客户端生成 data: any）
+		if mt.NumOut() == 2 {
+			if msgT := streamMsgType(mt.Out(0)); msgT != nil {
+				if msgT.Kind() != reflect.Interface {
+					checkType(msgT)
+				}
+			} else {
+				checkType(mt.Out(0))
+			}
 		}
 
 		// 注册到 "ServiceName.MethodName"

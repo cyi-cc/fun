@@ -185,7 +185,11 @@ func TestStartedGuardAndShutdown(t *testing.T) {
 	}
 
 	catch := func(fn func()) (msg string) {
-		defer func() { msg = fmt.Sprint(recover()) }()
+		defer func() {
+			if r := recover(); r != nil {
+				msg = fmt.Sprint(r)
+			}
+		}()
 		fn()
 		return ""
 	}
@@ -248,8 +252,8 @@ func (boomMarshaler) MarshalJSON() ([]byte, error) { panic("boom-json") }
 
 type PanicStreamSvc struct{}
 
-func (s *PanicStreamSvc) Go() (*Stream, error) {
-	st := &Stream{}
+func (s *PanicStreamSvc) Go() (*Stream[any], error) {
+	st := &Stream[any]{}
 	go func() {
 		_ = st.Send(boomMarshaler{})
 		st.Close()
@@ -339,5 +343,54 @@ if (!requestBody.includes('"id":42')) throw new Error("small int broken: " + req
 	}
 	if output, err := exec.Command(node, "--experimental-strip-types", scriptPath).CombinedOutput(); err != nil {
 		t.Fatalf("bigint round trip failed: %v\n%s", err, output)
+	}
+}
+
+// ---- 返回类型 T 与 DTO 同受类型系统约束（含 Stream[T] 的消息类型） ----
+
+type BadRetOnly struct{}
+
+func (*BadRetOnly) Ok() (string, error) { return "ok", nil }
+
+type mapRetSvc struct{}
+
+func (*mapRetSvc) M() (map[string]any, error) { return nil, nil }
+
+type anyRetSvc struct{}
+
+func (*anyRetSvc) M() (any, error) { return nil, nil }
+
+type badStreamSvc struct{}
+
+func (*badStreamSvc) M() (*Stream[map[string]any], error) { return nil, nil }
+
+type anyStreamSvc struct{}
+
+func (*anyStreamSvc) M() (*Stream[any], error) { return &Stream[any]{}, nil }
+
+func TestReturnTypeCheckedAtBind(t *testing.T) {
+	panics := func(fn func()) (p bool) {
+		defer func() { p = recover() != nil }()
+		fn()
+		return false
+	}
+	if panics(func() { _ = New().BindService(&BadRetOnly{}) }) {
+		t.Fatal("normal service must not panic")
+	}
+	for _, tc := range []struct {
+		name string
+		svc  any
+	}{
+		{"map return", &mapRetSvc{}},
+		{"any return", &anyRetSvc{}},
+		{"Stream[map]", &badStreamSvc{}},
+	} {
+		if !panics(func() { _ = New().BindService(tc.svc) }) {
+			t.Fatalf("%s must panic at bind", tc.name)
+		}
+	}
+	// Stream[any] 显式任意消息流：放行
+	if panics(func() { _ = New().BindService(&anyStreamSvc{}) }) {
+		t.Fatal("Stream[any] should pass")
 	}
 }

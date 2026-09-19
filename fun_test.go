@@ -44,8 +44,8 @@ func (s *TestSvc) Hello(dto TestDto) (string, error) {
 	return "hi " + dto.Name, nil
 }
 
-func (s *TestSvc) Count(dto TestDto) (*Stream, error) {
-	st := Stream{}
+func (s *TestSvc) Count(dto TestDto) (*Stream[string], error) {
+	st := &Stream[string]{}
 	go func() {
 		for i := 0; i < 3; i++ {
 			st.Send(fmt.Sprintf("n%d", i))
@@ -53,7 +53,7 @@ func (s *TestSvc) Count(dto TestDto) (*Stream, error) {
 		}
 		st.Close()
 	}()
-	return &st, nil
+	return st, nil
 }
 
 func TestCtxBoxInject(t *testing.T) {

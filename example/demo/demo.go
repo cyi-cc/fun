@@ -16,19 +16,19 @@ func (OrderStatus) DisplayNames() []string { return []string{"待支付", "已�
 // CreateOrderDto 下单参数。规则：非指针字段必传；指针/slice 字段可省略；
 // 数值一律定宽整型（int64），小数用 string 传输
 type CreateOrderDto struct {
-	Sku    string    // 必传
-	Count  int64     // 必传
-	Note   *string   // 可空
+	Sku    string       // 必传
+	Count  int64        // 必传
+	Note   *string      // 可空
 	Status *OrderStatus // 可空，缺省 Pending
-	Tags   []string // 可省略
+	Tags   []string     // 可省略
 }
 
 // OrderDto 订单视图。Id 为雪花 ID：全链路 int64 精度，TS 侧解析为 BigInt
 type OrderDto struct {
-	Id      int64
-	Status  OrderStatus
-	Amount  string   // 小数金额用字符串传输
-	Items   []string
+	Id     int64
+	Status OrderStatus
+	Amount string // 小数金额用字符串传输
+	Items  []string
 }
 
 type GetOrderDto struct {
@@ -75,14 +75,14 @@ type AskDto struct {
 	Prompt string
 }
 
-// ChatSvc 流式服务：纯流 + 首条消息流两种签名
+// ChatSvc 流式服务：消息类型由 *Stream[T] 的类型实参声明
 type ChatSvc struct {
 	fun.Ctx
 }
 
 // Chat 纯流式：响应为 application/x-ndjson，逐行推送
-func (s *ChatSvc) Chat(dto ChatDto) (*fun.Stream, error) {
-	st := &fun.Stream{}
+func (s *ChatSvc) Chat(dto ChatDto) (*fun.Stream[string], error) {
+	st := &fun.Stream[string]{}
 	go func() {
 		for _, chunk := range []string{"你好", "，这是", "流式示例"} {
 			if err := st.Send(chunk); err != nil {
@@ -94,12 +94,15 @@ func (s *ChatSvc) Chat(dto ChatDto) (*fun.Stream, error) {
 	return st, nil
 }
 
-// Ask (T, stream, error)：T 作为流的第一条消息下发
-func (s *ChatSvc) Ask(dto AskDto) (string, *fun.Stream, error) {
-	st := &fun.Stream{}
+// Ask 回执也经流下发：先推一条确认，再推思考过程
+func (s *ChatSvc) Ask(dto AskDto) (*fun.Stream[string], error) {
+	st := &fun.Stream[string]{}
 	go func() {
+		if err := st.Send("收到：" + dto.Prompt); err != nil {
+			return
+		}
 		_ = st.Send("思考中...")
 		st.Close()
 	}()
-	return "收到：" + dto.Prompt, st, nil
+	return st, nil
 }

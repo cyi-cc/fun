@@ -70,18 +70,18 @@ func (ctx GenTs) genService(svc *genSvc, serviceContext *genServiceType) {
 		returnType := gm.sig.Out(0)
 		if gm.isStream {
 			serviceContext.IsIncludeStream = true
-			if returnType == streamType {
-				genericTypeText = "any"
-				returnValueText = "void"
-			} else {
-				t := firstLetterToLower(ctx.typeToTemplateType(returnType))
+			returnValueText = "void"
+			if msgT := streamMsgType(returnType); msgT != nil && msgT.Kind() != reflect.Interface {
+				t := firstLetterToLower(ctx.typeToTemplateType(msgT))
 				if !strings.Contains(t, "[]") && strings.Contains(t, "[") {
 					genericTypeText = getGenericTypeName(t) + parseGenericTypeParams(t)
 				} else {
 					genericTypeText = t
 				}
-				returnValueText = "void"
-				nestedImports = ctx.genReturnTypes(returnType, nestedImports)
+				nestedImports = ctx.genReturnTypes(msgT, nestedImports)
+			} else {
+				// Stream[any]：消息类型由运行期决定，客户端回调给 any
+				genericTypeText = "any"
 			}
 		} else {
 			serviceContext.IsIncludeRequest = true

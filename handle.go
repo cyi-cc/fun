@@ -77,7 +77,7 @@ func (f *Fun) handle(fastCtx *fasthttp.RequestCtx) {
 	}
 
 	// 流式方法：响应保持打开，以 NDJSON 行推送（Streamable HTTP）
-	// streamCh != nil 表示流式方法；业务返回的 *Stream 在 invoke 内完成注入
+	// streamCh != nil 表示流式方法；业务返回的 *Stream[T] 在 invoke 内完成注入
 	var streamCh chan any
 	var streamDone chan struct{}
 
@@ -120,13 +120,6 @@ func (f *Fun) handle(fastCtx *fasthttp.RequestCtx) {
 					return false
 				}
 				return true
-			}
-			// (T, stream, error)：T 作为流的第一条消息下发
-			if result.Data != nil {
-				if !writeLine(*result.Data) {
-					finish()
-					return
-				}
 			}
 			// 空闲心跳：业务长时间不 Send 时周期写一个空行。NDJSON 解析器
 			// 跳过空行（业务无感知），字节能让 NAT/CDN 的空闲计时器归零。
@@ -179,7 +172,7 @@ func (f *Fun) handlePanic(c *Ctx) {
 }
 
 // invoke 按 "Service.Method" 查找并调用，返回成功结果
-// 流式方法时，业务返回的 *Stream 完成通道注入（streamCh/streamDone 被创建并填充）
+// 流式方法时，业务返回的 *Stream[T] 完成通道注入（streamCh/streamDone 被创建并填充）
 // 预期错误（方法不存在、参数缺失、业务失败）以 error 返回，不 panic
 func (f *Fun) invoke(c *Ctx, streamCh *chan any, streamDone *chan struct{}) (*Result[any], error) {
 	key := c.ServiceName + "." + c.MethodName
@@ -210,7 +203,7 @@ func (f *Fun) invoke(c *Ctx, streamCh *chan any, streamDone *chan struct{}) (*Re
 		}
 		if decodeErr != nil {
 			// 客户端只收通用提示；详细原因记服务端日志，不外泄 Go 类型等内部信息
-			ErrorLogger("fun: decode request data (" + c.ServiceName + "." + c.MethodName + "): ", decodeErr.Error())
+			ErrorLogger("fun: decode request data ("+c.ServiceName+"."+c.MethodName+"): ", decodeErr.Error())
 			return nil, errInvalidData
 		}
 		args = append(args, dto)
@@ -223,10 +216,15 @@ func (f *Fun) invoke(c *Ctx, streamCh *chan any, streamDone *chan struct{}) (*Re
 	return callResult(c, values, method, streamCh, streamDone)
 }
 
+// streamInjector 流句柄的注入协议面：*Stream[T] 对任意 T 都满足
+type streamInjector interface {
+	Inject(chan any, chan struct{})
+}
+
 // callResult 将反射调用结果归一为 Result
-// 兼容四种签名：(error)、(T, error)、(stream, error)、(T, stream, error)
+// 兼容三种签名：(error)、(T, error)、(*Stream[T], error)
 //   - 末位返回值是 error 且非 nil → 业务失败，返回 error
-//   - 带 *Stream 的签名：注入推送通道后，仅 (T, stream, error) 返回 T 作为数据
+//   - *Stream[T] 签名：注入推送通道，数据全经流推送
 func callResult(c *Ctx, values []reflect.Value, method methodInfo, streamCh *chan any, streamDone *chan struct{}) (*Result[any], error) {
 	if last := values[len(values)-1]; last.Type().Implements(errorType) {
 		if !last.IsNil() {
@@ -246,23 +244,14 @@ func callResult(c *Ctx, values []reflect.Value, method methodInfo, streamCh *cha
 	}
 
 	if method.isStream {
-		// (stream, error)：流在第 0 位；(T, stream, error)：流在第 1 位
-		streamIdx := 0
-		if len(values) == 2 {
-			streamIdx = 1
-		}
-		s := values[streamIdx].Interface().(*Stream)
-		if s == nil {
+		// (*Stream[T], error)：流固定在第 0 位
+		s, ok := values[0].Interface().(streamInjector)
+		if !ok || values[0].IsNil() {
 			return nil, errors.New("fun: method returned nil stream")
 		}
 		*streamCh = make(chan any)
 		*streamDone = make(chan struct{})
 		s.Inject(*streamCh, *streamDone)
-		// (T, stream, error)：返回 T；纯流：不返回数据
-		if len(values) == 2 {
-			r := success(values[0].Interface())
-			return &r, nil
-		}
 		r := success(nil)
 		return &r, nil
 	}
@@ -279,12 +268,8 @@ func callResult(c *Ctx, values []reflect.Value, method methodInfo, streamCh *cha
 // injectCancelledStream 业务出错时注入已取消的流通道，
 // 使正在 Send/Close 上阻塞的业务 goroutine 立即解除并退出
 func injectCancelledStream(values []reflect.Value, method methodInfo, streamCh *chan any, streamDone *chan struct{}) {
-	streamIdx := 0
-	if len(values) == 3 { // (T, stream, error)
-		streamIdx = 1
-	}
-	s, ok := values[streamIdx].Interface().(*Stream)
-	if !ok || s == nil {
+	s, ok := values[0].Interface().(streamInjector)
+	if !ok || values[0].IsNil() {
 		return
 	}
 	*streamCh = make(chan any)

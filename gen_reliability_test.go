@@ -25,12 +25,12 @@ func (*AlphaGenSvc) Ping() error                                { return nil }
 
 type MixedGenSvc struct{}
 
-func (*MixedGenSvc) Request() (string, error) { return "", nil }
-func (*MixedGenSvc) Stream() (*Stream, error) { return &Stream{}, nil }
+func (*MixedGenSvc) Request() (string, error)      { return "", nil }
+func (*MixedGenSvc) Stream() (*Stream[any], error) { return &Stream[any]{}, nil }
 
 type ZebraGenSvc struct{}
 
-func (*ZebraGenSvc) Watch() (*Stream, error) { return &Stream{}, nil }
+func (*ZebraGenSvc) Watch() (*Stream[any], error) { return &Stream[any]{}, nil }
 
 type GenOnlyDependency struct{}
 

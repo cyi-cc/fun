@@ -27,13 +27,14 @@ func (s *BugSvc) Ping() error { return nil }
 
 func (s *BugSvc) Save(dto BugDto) (string, error) { return "ok", nil }
 
-func (s *BugSvc) Ticker() (string, *Stream, error) {
-	st := Stream{}
+func (s *BugSvc) Ticker() (*Stream[string], error) {
+	st := &Stream[string]{}
 	go func() {
+		st.Send("first")
 		st.Send("tick")
 		st.Close()
 	}()
-	return "first", &st, nil
+	return st, nil
 }
 
 func bugInvoke(t *testing.T, method string, data map[string]any) (*Result[any], error) {
@@ -99,7 +100,7 @@ func TestBugGenErrorOnly(t *testing.T) {
 	}
 }
 
-// bug4+5: 响应键应为小写；(T, stream, error) 的 T 应作为流的第一条消息下发
+// bug4+5: 响应键应为小写；流消息按 Send 顺序逐行下发
 func TestBugJsonKeysAndStreamFirst(t *testing.T) {
 	f := New()
 	if err := f.BindService(&BugSvc{}); err != nil {
@@ -173,8 +174,8 @@ var leakDone chan struct{}
 
 type LeakSvc struct{}
 
-func (s *LeakSvc) Fail() (*Stream, error) {
-	st := Stream{}
+func (s *LeakSvc) Fail() (*Stream[any], error) {
+	st := Stream[any]{}
 	leakDone = make(chan struct{})
 	go func() {
 		st.Send("never")

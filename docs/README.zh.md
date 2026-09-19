@@ -31,8 +31,8 @@ func main() {
 
 - 服务结构体嵌入 `fun.Ctx` + 依赖字段（指针结构体字段自动装配）。
 - **每请求新建服务实例**并注入依赖，服务内不放共享状态。
-- 方法签名四种：`() error`、`(dto) (T, error)`、`(dto) (*fun.Stream, error)`、
-  `(dto) (T, *fun.Stream, error)`（首条消息 T + 后续流）。
+- 方法签名三种：`() error`、`(dto) (T, error)`、`(dto) (*fun.Stream[T], error)`。
+  流式消息类型由 `Stream[T]` 的类型实参声明（`Stream[any]` 为任意消息流）。
 - 只有导出方法成为端点，注册名 `服务名.方法名`。
 
 ## 2. DTO 规则（违反即注册期 panic）
@@ -113,7 +113,7 @@ f.CORS("https://a.com", "https://b.com") // Start 前调用，可变参数白名
 ## 7. 流式响应（NDJSON）
 
 ```go
-st := &fun.Stream{}
+st := &fun.Stream[string]{}
 go func() {
     for _, chunk := range chunks {
         if st.Send(chunk) != nil { return } // 连接断开

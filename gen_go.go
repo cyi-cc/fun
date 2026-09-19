@@ -58,18 +58,19 @@ func (ctx GenGo) genService(svc *genSvc, serviceContext *genServiceType) {
 		returnType := gm.sig.Out(0)
 		if gm.isStream {
 			serviceContext.IsIncludeStream = true
-			if returnType == streamType {
-				genericTypeText = "any"
-				returnValueText = "Void"
-			} else {
-				t := ctx.typeToTemplateType(returnType)
+			returnValueText = "Void"
+			if msgT := streamMsgType(returnType); msgT != nil && msgT.Kind() != reflect.Interface {
+				t := ctx.typeToTemplateType(msgT)
 				if !strings.Contains(t, "[]") && strings.Contains(t, "[") {
 					genericTypeText = getGenericTypeName(t) + parseGenericTypeParams(t)
 				} else {
 					genericTypeText = t
 				}
 				returnValueText = genericTypeText
-				ctx.genReturnTypes(returnType)
+				ctx.genReturnTypes(msgT)
+			} else {
+				// Stream[any]：消息类型由运行期决定，客户端通道给 any
+				genericTypeText = "any"
 			}
 		} else {
 			t := ctx.typeToTemplateType(returnType)
