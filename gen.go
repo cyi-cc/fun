@@ -66,6 +66,9 @@ type genMethodType struct {
 	MethodName      string
 	ReturnValueText string
 	DtoText         string
+	// DtoFactoryText 是去掉 "dto:" 参数名前缀的裸类型文本，供流方法的
+	// dto | (() => dto) 工厂联合类型使用（DtoText 自带参数名不能直接复用）
+	DtoFactoryText  string
 	ArgsText        string
 	GenericTypeText string
 	IsProxy         bool

@@ -61,6 +61,7 @@ func (ctx GenTs) genService(svc *genSvc, serviceContext *genServiceType) {
 				MethodName:      firstLetterToLower(gm.name),
 				ReturnValueText: returnValueText,
 				DtoText:         dtoText,
+				DtoFactoryText:  strings.TrimPrefix(dtoText, "dto:"),
 				ArgsText:        argsText,
 				GenericTypeText: genericTypeText,
 			})
@@ -111,6 +112,7 @@ func (ctx GenTs) genService(svc *genSvc, serviceContext *genServiceType) {
 			MethodName:      firstLetterToLower(gm.name),
 			ReturnValueText: returnValueText,
 			DtoText:         dtoText,
+			DtoFactoryText:  strings.TrimPrefix(dtoText, "dto:"),
 			ArgsText:        argsText,
 			GenericTypeText: firstLetterToLower(genericTypeText),
 			IsStream:        gm.isStream,

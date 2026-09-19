@@ -705,7 +705,7 @@ export default class {{.ServiceName}} {
   }
   {{- $serviceName := .ServiceName }}
   {{- range .GenMethodTypeList}}
-  {{if .IsStream }}async {{.MethodName}}({{if .DtoText}}dto: {{.DtoText}} | (() => {{.DtoText}}), {{end}}onMessage: (data: {{.GenericTypeText}}) => unknown, options?: StreamOptions): Promise<result<void>> {
+  {{if .IsStream }}async {{.MethodName}}({{if .DtoText}}{{.DtoText}} | (() => {{.DtoFactoryText}}), {{end}}onMessage: (data: {{.GenericTypeText}}) => unknown, options?: StreamOptions): Promise<result<void>> {
     return await this.client.stream<{{.GenericTypeText}}>("{{$serviceName}}", "{{.MethodName}}", {{if .DtoText}}dto{{else}}undefined{{end}}, onMessage, options)
   }{{else}}async {{.MethodName}}({{if .DtoText}}{{.DtoText}}, {{end}}options?: RequestOptions): Promise<{{.ReturnValueText}}> {
     return await this.client.request<{{.GenericTypeText}}>("{{$serviceName}}", "{{.MethodName}}", {{if .DtoText}}dto{{else}}undefined{{end}}, options)

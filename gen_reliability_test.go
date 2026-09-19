@@ -32,6 +32,12 @@ type ZebraGenSvc struct{}
 
 func (*ZebraGenSvc) Watch() (*Stream[any], error) { return &Stream[any]{}, nil }
 
+// WatchSince：带 dto 的流方法——曾因 DtoText 自带 "dto:" 参数名前缀被模板
+// 再拼一层，生成 "dto: dto:T | (() => dto:T)" 非法 TS（v1.4.1 线上踩坑）
+type WatchSinceDto struct{ AfterId string }
+
+func (*ZebraGenSvc) WatchSince(dto WatchSinceDto) (*Stream[any], error) { return &Stream[any]{}, nil }
+
 type GenOnlyDependency struct{}
 
 func (*GenOnlyDependency) New() { panic("generation initialized a runtime dependency") }
@@ -155,10 +161,16 @@ func TestGeneratedTypeScriptSignaturesAndImports(t *testing.T) {
 	for _, want := range []string{
 		`async watch(onMessage: (data: any) => unknown, options?: StreamOptions): Promise<result<void>>`,
 		`this.client.stream<any>("zebraGenSvc", "watch", undefined, onMessage, options)`,
+		// 带 dto 的流方法：工厂联合类型里用裸类型，参数名只出现一次
+		`async watchSince(dto:watchSinceDto | (() => watchSinceDto), onMessage: (data: any) => unknown, options?: StreamOptions): Promise<result<void>>`,
+		`this.client.stream<any>("zebraGenSvc", "watchSince", dto, onMessage, options)`,
 	} {
 		if !strings.Contains(stream, want) {
 			t.Errorf("zebraGenSvc.ts missing %q:\n%s", want, stream)
 		}
+	}
+	if strings.Contains(stream, "dto: dto:") {
+		t.Fatalf("stream dto parameter doubled its name annotation:\n%s", stream)
 	}
 
 	mixed := read("mixedGenSvc.ts")
